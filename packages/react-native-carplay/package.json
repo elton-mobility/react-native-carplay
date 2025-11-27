@@ -1,7 +1,7 @@
 {
-  "name": "@g4rb4g3/react-native-carplay",
-  "version": "2.7.19",
-  "description": "CarPlay for React Native",
+  "name": "@elton-mobility/react-native-carplay",
+  "version": "3.0.0-alpha.1",
+  "description": "CarPlay for React Native with Expo support and New Architecture",
   "main": "lib/index.js",
   "react-native": "src/index.ts",
   "source": "src/index.ts",
@@ -10,6 +10,8 @@
     "lib",
     "ios",
     "android",
+    "plugin",
+    "app.plugin.js",
     "react-native-carplay.podspec"
   ],
   "podspecPath": "./react-native-carplay.podspec",
@@ -22,7 +24,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/g4rb4g3/react-native-carplay.git"
+    "url": "git+https://github.com/elton-mobility/react-native-carplay.git"
   },
   "keywords": [
     "react",
@@ -30,23 +32,38 @@
     "carplay",
     "navigation",
     "car",
-    "auto"
+    "auto",
+    "expo",
+    "new-architecture",
+    "fabric"
   ],
-  "author": "Birkir Gudjonsson <birkir.gudjonsson@gmail.com>",
+  "contributors": [
+    "Birkir Gudjonsson <birkir.gudjonsson@gmail.com>",
+    "g4rb4g3",
+    "Elton Mobility"
+  ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/g4rb4g3/react-native-carplay/issues"
+    "url": "https://github.com/elton-mobility/react-native-carplay/issues"
   },
-  "homepage": "https://github.com/g4rb4g3/react-native-carplay#readme",
+  "homepage": "https://github.com/elton-mobility/react-native-carplay#readme",
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0",
-    "react-native": "^0.74.0 || ^0.76.0 || ^0.79.0"
+    "react-native": "^0.74.0 || ^0.76.0 || ^0.79.0",
+    "@expo/config-plugins": ">=7.0.0",
+    "expo": ">=51.0.0"
   },
   "peerDependenciesMeta": {
     "react": {
       "optional": true
     },
     "react-native": {
+      "optional": true
+    },
+    "@expo/config-plugins": {
+      "optional": true
+    },
+    "expo": {
       "optional": true
     }
   },
