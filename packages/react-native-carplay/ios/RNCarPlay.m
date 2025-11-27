@@ -1,6 +1,10 @@
 #import "RNCarPlay.h"
 #import <React/RCTConvert.h>
 #import <React/RCTRootView.h>
+#import <React/RCTUtils.h>
+#import <React/RCTSurfaceHostingProxyRootView.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 #import "react_native_carplay/react_native_carplay-Swift.h"
 
 static NSMutableDictionary<NSNumber *, CPNavigationAlert *> *navigationAlertWrappers;
@@ -60,6 +64,93 @@ static NSMutableDictionary<NSNumber *, CPNavigationAlert *> *navigationAlertWrap
         store.app = [[RNCarPlayApp alloc] init];
     }
     [store.app connectSceneWithInterfaceController:interfaceController window:window];
+
+    // Check if we have a pending fabric surface to create (bridgeless mode)
+    [self createPendingFabricSurfaceWithWindow:window];
+}
+
++ (void) createPendingFabricSurfaceWithWindow:(CPWindow*)window {
+    RNCPStore *store = [RNCPStore sharedManager];
+    id surfacePresenter = objc_getAssociatedObject(store.app, "surfacePresenter");
+    NSString *moduleName = objc_getAssociatedObject(store.app, "pendingModuleName");
+
+    if (surfacePresenter == nil || moduleName == nil) {
+        return;
+    }
+
+    // Clear the pending state
+    objc_setAssociatedObject(store.app, "surfacePresenter", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(store.app, "pendingModuleName", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ((RNCarPlayApp *)store.app).hasPendingFabricSurface = NO;
+
+    // Create the FabricSurface dynamically using Objective-C runtime
+    Class RCTFabricSurfaceClass = NSClassFromString(@"RCTFabricSurface");
+    if (RCTFabricSurfaceClass == nil) {
+        return;
+    }
+
+    // Determine color scheme from window
+    NSString *colorScheme = window.screen.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark ? @"dark" : @"light";
+
+    NSDictionary *initialProps = @{
+        @"id": moduleName,
+        @"colorScheme": colorScheme,
+        @"window": @{
+            @"height": @(window.bounds.size.height),
+            @"width": @(window.bounds.size.width),
+            @"scale": @(window.screen.scale)
+        }
+    };
+
+    // Create instance using alloc + initWithSurfacePresenter:moduleName:initialProperties:
+    id fabricSurface = [RCTFabricSurfaceClass alloc];
+    SEL initSelector = NSSelectorFromString(@"initWithSurfacePresenter:moduleName:initialProperties:");
+
+    if (![fabricSurface respondsToSelector:initSelector]) {
+        return;
+    }
+
+    NSMethodSignature *sig = [fabricSurface methodSignatureForSelector:initSelector];
+    NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:sig];
+    [invocation setTarget:fabricSurface];
+    [invocation setSelector:initSelector];
+    [invocation setArgument:&surfacePresenter atIndex:2];
+    [invocation setArgument:&moduleName atIndex:3];
+    [invocation setArgument:&initialProps atIndex:4];
+    [invocation invoke];
+    [invocation getReturnValue:&fabricSurface];
+
+    // Set the size to match the window
+    SEL setSizeSelector = NSSelectorFromString(@"setSize:");
+    if ([fabricSurface respondsToSelector:setSizeSelector]) {
+        CGSize windowSize = window.bounds.size;
+        NSMethodSignature *sizeSig = [fabricSurface methodSignatureForSelector:setSizeSelector];
+        NSInvocation *sizeInvocation = [NSInvocation invocationWithMethodSignature:sizeSig];
+        [sizeInvocation setTarget:fabricSurface];
+        [sizeInvocation setSelector:setSizeSelector];
+        [sizeInvocation setArgument:&windowSize atIndex:2];
+        [sizeInvocation invoke];
+    }
+
+    // Start the surface - required for Fabric surfaces to begin rendering
+    SEL startSelector = NSSelectorFromString(@"start");
+    if ([fabricSurface respondsToSelector:startSelector]) {
+        [fabricSurface performSelector:startSelector];
+    }
+
+    // Get the view
+    SEL viewSelector = NSSelectorFromString(@"view");
+    if (![fabricSurface respondsToSelector:viewSelector]) {
+        return;
+    }
+
+    UIView *surfaceView = [fabricSurface performSelector:viewSelector];
+
+    // Store the fabricSurface to prevent deallocation
+    objc_setAssociatedObject(store.app, "fabricSurface", fabricSurface, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // Pass the view to Swift - use the new method that sets up the view immediately
+    [store.app connectWithFabricViewWithFabricView:surfaceView moduleName:moduleName];
 }
 
 + (void) disconnect {
@@ -265,10 +356,14 @@ RCT_EXPORT_MODULE();
 }
 
 RCT_EXPORT_METHOD(checkForConnection) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    RNCarPlayApp* app = store.app;
-    if (app.isConnected && hasListeners) {
-        [self sendEventWithName:@"didConnect" body:[app getConnectedWindowInformation]];
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        RNCarPlayApp* app = store.app;
+        if (app.isConnected && hasListeners) {
+            [self sendEventWithName:@"didConnect" body:[app getConnectedWindowInformation]];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in checkForConnection: %@", e);
     }
 }
 
@@ -520,16 +615,25 @@ RCT_EXPORT_METHOD(createTrip:(NSString*)tripId config:(NSDictionary*)config) {
     [store setTrip:tripId trip:trip];
 }
 
-RCT_EXPORT_METHOD(updateTravelEstimatesForTrip:(NSString*)templateId tripId:(NSString*)tripId travelEstimates:(NSDictionary*)travelEstimates timeRemainingColor:(NSUInteger*)timeRemainingColor) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
-        if (trip) {
-            CPTravelEstimates *estimates = [self parseTravelEstimates:travelEstimates];
-            [mapTemplate updateTravelEstimates:estimates forTrip:trip withTimeRemainingColor:(CPTimeRemainingColor) timeRemainingColor];
+RCT_EXPORT_METHOD(updateTravelEstimatesForTrip:(NSString*)templateId tripId:(NSString*)tripId travelEstimates:(NSDictionary*)travelEstimates timeRemainingColor:(double)timeRemainingColor) {
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
+            if (trip) {
+                NSLog(@"[RNCarPlay] updateTravelEstimatesForTrip: updating trip %@", tripId);
+                CPTravelEstimates *estimates = [self parseTravelEstimates:travelEstimates];
+                [mapTemplate updateTravelEstimates:estimates forTrip:trip withTimeRemainingColor:(CPTimeRemainingColor)(NSUInteger)timeRemainingColor];
+            } else {
+                NSLog(@"[RNCarPlay] updateTravelEstimatesForTrip: trip %@ not found!", tripId);
+            }
+        } else {
+            NSLog(@"[RNCarPlay] updateTravelEstimatesForTrip: template %@ not found!", templateId);
         }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateTravelEstimatesForTrip: %@", e);
     }
 }
 
@@ -562,45 +666,64 @@ RCT_REMAP_METHOD(startNavigationSession,
 }
 
 RCT_EXPORT_METHOD(updateManeuvers:(NSArray*)maneuvers) {
-    CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
-    if (navigationSession) {
-        NSMutableArray<CPManeuver*>* upcomingManeuvers = [NSMutableArray array];
-        if (@available(iOS 18.0, *)) {
-            NSMutableArray<CPLaneGuidance*>* upcomingLaneGuidances = [NSMutableArray array];
-            for (NSDictionary *maneuver in maneuvers) {
-                CPManeuver *parsedManeuver = [self parseManeuver:maneuver];
-                CPLaneGuidance *parsedLaneGuidance = [self parseLaneGuidance:maneuver];
-                if (parsedLaneGuidance != nil) {
-                    parsedManeuver.linkedLaneGuidance = parsedLaneGuidance;
-                    [upcomingLaneGuidances addObject:parsedLaneGuidance];
-                }
-                
-                [upcomingManeuvers addObject:parsedManeuver];
-            }
-            [navigationSession addLaneGuidances:upcomingLaneGuidances];
-            [navigationSession setCurrentLaneGuidance:upcomingLaneGuidances.lastObject];
-        } else {
-            for (NSDictionary *maneuver in maneuvers) {
-                [upcomingManeuvers addObject:[self parseManeuver:maneuver]];
-            }
-        }
-        
-        if (@available(iOS 17.4, *)) {
-            // disgusting workaround to prevent crashes on iOS < 17.4 even though this should be supported since iOS 12 according to Apple docs
-            [navigationSession addManeuvers:upcomingManeuvers];
-        }
+    @try {
+        CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
+        if (navigationSession) {
+            NSLog(@"[RNCarPlay] updateManeuvers: session exists, updating %lu maneuvers", (unsigned long)maneuvers.count);
+            NSMutableArray<CPManeuver*>* upcomingManeuvers = [NSMutableArray array];
+            if (@available(iOS 18.0, *)) {
+                NSMutableArray<CPLaneGuidance*>* upcomingLaneGuidances = [NSMutableArray array];
+                for (NSDictionary *maneuver in maneuvers) {
+                    CPManeuver *parsedManeuver = [self parseManeuver:maneuver];
+                    CPLaneGuidance *parsedLaneGuidance = [self parseLaneGuidance:maneuver];
+                    if (parsedLaneGuidance != nil) {
+                        parsedManeuver.linkedLaneGuidance = parsedLaneGuidance;
+                        [upcomingLaneGuidances addObject:parsedLaneGuidance];
+                    }
 
-        [navigationSession setUpcomingManeuvers:upcomingManeuvers];
+                    [upcomingManeuvers addObject:parsedManeuver];
+                }
+                [navigationSession addLaneGuidances:upcomingLaneGuidances];
+                [navigationSession setCurrentLaneGuidance:upcomingLaneGuidances.lastObject];
+            } else {
+                for (NSDictionary *maneuver in maneuvers) {
+                    [upcomingManeuvers addObject:[self parseManeuver:maneuver]];
+                }
+            }
+
+            if (@available(iOS 17.4, *)) {
+                // disgusting workaround to prevent crashes on iOS < 17.4 even though this should be supported since iOS 12 according to Apple docs
+                [navigationSession addManeuvers:upcomingManeuvers];
+            }
+
+            [navigationSession setUpcomingManeuvers:upcomingManeuvers];
+        } else {
+            NSLog(@"[RNCarPlay] updateManeuvers: navigationSession is NIL! Data dropped.");
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateManeuvers: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(updateTravelEstimatesNavigationSession:(NSUInteger)maneuverIndex travelEstimates:(NSDictionary*)travelEstimates) {
-    CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
-    if (navigationSession) {
-        CPManeuver *maneuver = [[navigationSession upcomingManeuvers] objectAtIndex:maneuverIndex];
-        if (maneuver) {
-            [navigationSession updateTravelEstimates:[self parseTravelEstimates:travelEstimates] forManeuver:maneuver];
+    @try {
+        CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
+        if (navigationSession) {
+            NSArray *maneuvers = [navigationSession upcomingManeuvers];
+            if (maneuverIndex < maneuvers.count) {
+                CPManeuver *maneuver = [maneuvers objectAtIndex:maneuverIndex];
+                if (maneuver) {
+                    NSLog(@"[RNCarPlay] updateTravelEstimatesNavigationSession: updating maneuver %lu", (unsigned long)maneuverIndex);
+                    [navigationSession updateTravelEstimates:[self parseTravelEstimates:travelEstimates] forManeuver:maneuver];
+                }
+            } else {
+                NSLog(@"[RNCarPlay] updateTravelEstimatesNavigationSession: maneuverIndex %lu out of bounds (count: %lu)", (unsigned long)maneuverIndex, (unsigned long)maneuvers.count);
+            }
+        } else {
+            NSLog(@"[RNCarPlay] updateTravelEstimatesNavigationSession: navigationSession is NIL! Data dropped.");
         }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateTravelEstimatesNavigationSession: %@", e);
     }
 }
 
@@ -1163,7 +1286,75 @@ RCT_EXPORT_METHOD(getRootTemplate: (RCTPromiseResolveBlock)resolve
         if (store.app == nil) {
             store.app = [[RNCarPlayApp alloc] init];
         }
-        [store.app connectModuleWithBridge:self.bridge moduleName:templateId];
+        // Try to get the RCTRootViewFactory from AppDelegate for New Architecture support
+        NSObject *appDelegate = (NSObject *)RCTSharedApplication().delegate;
+        RCTRootViewFactory *factory = nil;
+        RCTBridge *factoryBridge = nil;
+        if ([appDelegate respondsToSelector:NSSelectorFromString(@"reactNativeFactory")]) {
+            id reactNativeFactory = [appDelegate valueForKey:@"reactNativeFactory"];
+            if (reactNativeFactory != nil && [reactNativeFactory respondsToSelector:NSSelectorFromString(@"rootViewFactory")]) {
+                factory = [reactNativeFactory valueForKey:@"rootViewFactory"];
+                if (factory != nil && factory.bridge != nil) {
+                    factoryBridge = factory.bridge;
+                }
+            }
+        }
+
+        // Check if we can get reactHost for bridgeless mode (New Architecture)
+        id reactHost = nil;
+        if (factory != nil && [factory respondsToSelector:NSSelectorFromString(@"reactHost")]) {
+            reactHost = [factory valueForKey:@"reactHost"];
+        }
+
+        RCTBridge *bridgeToUse = factoryBridge ?: (self.bridge.valid ? self.bridge : nil);
+
+        if (reactHost != nil) {
+            // Bridgeless mode - get surfacePresenter using NSInvocation to avoid KVC issues
+            id surfacePresenter = nil;
+            SEL surfacePresenterSel = NSSelectorFromString(@"surfacePresenter");
+            if ([reactHost respondsToSelector:surfacePresenterSel]) {
+                NSMethodSignature *sig = [reactHost methodSignatureForSelector:surfacePresenterSel];
+                if (sig != nil) {
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    [inv setTarget:reactHost];
+                    [inv setSelector:surfacePresenterSel];
+                    @try {
+                        [inv invoke];
+                        void *result = nil;
+                        [inv getReturnValue:&result];
+                        surfacePresenter = (__bridge id)result;
+                    } @catch (NSException *e) {
+                        NSLog(@"[RNCarPlay] Exception getting surfacePresenter: %@", e);
+                    }
+                }
+            }
+
+            if (surfacePresenter != nil) {
+                // Store surfacePresenter for deferred surface creation
+                objc_setAssociatedObject(store.app, "surfacePresenter", surfacePresenter, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                objc_setAssociatedObject(store.app, "pendingModuleName", templateId, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+                BOOL isConnected = ((RNCarPlayApp *)store.app).isConnected;
+                if (isConnected) {
+                    // Defer surface creation to next run loop to avoid TurboModule crash
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        @try {
+                            RNCPStore *asyncStore = [RNCPStore sharedManager];
+                            UIWindow *carPlayWindow = [((RNCarPlayApp *)asyncStore.app) getWindow];
+                            if (carPlayWindow != nil) {
+                                [RNCarPlay createPendingFabricSurfaceWithWindow:(CPWindow *)carPlayWindow];
+                            }
+                        } @catch (NSException *e) {
+                            NSLog(@"[RNCarPlay] Exception in dispatch_async: %@", e);
+                        }
+                    });
+                } else {
+                    ((RNCarPlayApp *)store.app).hasPendingFabricSurface = YES;
+                }
+            }
+        } else if (bridgeToUse != nil) {
+            [store.app connectModuleWithBridge:bridgeToUse moduleName:templateId];
+        }
     }
 }
 
