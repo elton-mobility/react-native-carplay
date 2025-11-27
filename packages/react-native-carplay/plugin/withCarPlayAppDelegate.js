@@ -125,11 +125,12 @@ function restructureApplicationMethod(contents) {
   const appDelegatePattern = /public\s+override\s+func\s+application\s*\([^{]*\)\s*->\s*Bool\s*\{[\s\S]*?return[^}]*\}/;
 
   if (contents.match(appDelegatePattern)) {
+    // IMPORTANT: Call super.application() first to allow Firebase and other
+    // Expo modules to initialize before React Native starts
     const newApplicationMethod = `public override func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
-
+    let result = super.application(application, didFinishLaunchingWithOptions: launchOptions)
     initRN(launchOptions: launchOptions)
-
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    return result
   }`;
 
     contents = contents.replace(appDelegatePattern, newApplicationMethod);
