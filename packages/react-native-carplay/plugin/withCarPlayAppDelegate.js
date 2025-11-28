@@ -125,9 +125,12 @@ function restructureApplicationMethod(contents) {
   const appDelegatePattern = /public\s+override\s+func\s+application\s*\([^{]*\)\s*->\s*Bool\s*\{[\s\S]*?return[^}]*\}/;
 
   if (contents.match(appDelegatePattern)) {
-    // IMPORTANT: Call super.application() first to allow Firebase and other
-    // Expo modules to initialize before React Native starts
+    // IMPORTANT:
+    // 1. Create window first (expo-dev-launcher needs it during super.application())
+    // 2. Call super.application() to let Firebase and other Expo modules initialize
+    // 3. Then call initRN() to start React Native
     const newApplicationMethod = `public override func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+    self.window = UIWindow(frame: UIScreen.main.bounds)
     let result = super.application(application, didFinishLaunchingWithOptions: launchOptions)
     initRN(launchOptions: launchOptions)
     return result
@@ -163,6 +166,8 @@ function addReactNativeInitFunction(contents) {
     return contents; // Already exists
   }
 
+  // Note: window is already created in didFinishLaunchingWithOptions before super.application()
+  // This is required because expo-dev-launcher needs window to exist during initialization
   const initRNFunction = `  func initRN(launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) {
     if (initialized) { return }
     initialized = true
@@ -175,7 +180,6 @@ function addReactNativeInitFunction(contents) {
     bindReactNativeFactory(factory)
 
     #if os(iOS) || os(tvOS)
-      window = UIWindow(frame: UIScreen.main.bounds)
       factory.startReactNative(
         withModuleName: "main",
         in: window,
