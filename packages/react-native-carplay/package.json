@@ -1,5 +1,5 @@
 {
-  "name": "@elton-mobility/react-native-carplay",
+  "name": "react-native-carplay",
   "version": "3.0.0-alpha.1",
   "description": "CarPlay for React Native with Expo support and New Architecture",
   "main": "lib/index.js",
