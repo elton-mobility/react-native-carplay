@@ -48,22 +48,22 @@
   },
   "homepage": "https://github.com/elton-mobility/react-native-carplay#readme",
   "peerDependencies": {
-    "react": "^18.0.0 || ^19.0.0",
-    "react-native": "^0.74.0 || ^0.76.0 || ^0.79.0",
     "@expo/config-plugins": ">=7.0.0",
-    "expo": ">=51.0.0"
+    "expo": ">=51.0.0",
+    "react": "^18.0.0 || ^19.0.0",
+    "react-native": "^0.74.0 || ^0.76.0 || ^0.79.0"
   },
   "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    },
-    "react-native": {
-      "optional": true
-    },
     "@expo/config-plugins": {
       "optional": true
     },
     "expo": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-native": {
       "optional": true
     }
   },

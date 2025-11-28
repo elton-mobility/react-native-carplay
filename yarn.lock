@@ -1606,6 +1606,43 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@elton-mobility/react-native-carplay@workspace:packages/react-native-carplay":
+  version: 0.0.0-use.local
+  resolution: "@elton-mobility/react-native-carplay@workspace:packages/react-native-carplay"
+  dependencies:
+    "@react-native-community/eslint-config": 3.2.0
+    "@tsconfig/react-native": 3.0.2
+    "@types/node": ^22.15.21
+    "@types/react": ^19.1.5
+    "@types/react-native": ^0.73.0
+    cross-env: 7.0.3
+    docusaurus-plugin-typedoc: 0.19.2
+    eslint: ^8.19.0
+    jest: 29.5.0
+    microbundle: 0.14.2
+    prettier: 2.6.2
+    rimraf: 3.0.2
+    typedoc: 0.24.7
+    typedoc-github-wiki-theme: 1.1.0
+    typedoc-plugin-markdown: 3.15.3
+    typescript: 5.0.4
+  peerDependencies:
+    "@expo/config-plugins": ">=7.0.0"
+    expo: ">=51.0.0"
+    react: ^18.0.0 || ^19.0.0
+    react-native: ^0.74.0 || ^0.76.0 || ^0.79.0
+  peerDependenciesMeta:
+    "@expo/config-plugins":
+      optional: true
+    expo:
+      optional: true
+    react:
+      optional: true
+    react-native:
+      optional: true
+  languageName: unknown
+  linkType: soft
+
 "@eslint-community/eslint-utils@npm:^4.2.0":
   version: 4.4.0
   resolution: "@eslint-community/eslint-utils@npm:4.4.0"
@@ -1647,37 +1684,6 @@ __metadata:
   checksum: 2afb77454c06e8316793d2e8e79a0154854d35e6782a1217da274ca60b5044d2c69d6091155234ed0551a1e408f86f09dd4ece02752c59568fa403e60611e880
   languageName: node
   linkType: hard
-
-"@g4rb4g3/react-native-carplay@workspace:packages/react-native-carplay":
-  version: 0.0.0-use.local
-  resolution: "@g4rb4g3/react-native-carplay@workspace:packages/react-native-carplay"
-  dependencies:
-    "@react-native-community/eslint-config": 3.2.0
-    "@tsconfig/react-native": 3.0.2
-    "@types/node": ^22.15.21
-    "@types/react": ^19.1.5
-    "@types/react-native": ^0.73.0
-    cross-env: 7.0.3
-    docusaurus-plugin-typedoc: 0.19.2
-    eslint: ^8.19.0
-    jest: 29.5.0
-    microbundle: 0.14.2
-    prettier: 2.6.2
-    rimraf: 3.0.2
-    typedoc: 0.24.7
-    typedoc-github-wiki-theme: 1.1.0
-    typedoc-plugin-markdown: 3.15.3
-    typescript: 5.0.4
-  peerDependencies:
-    react: ^17.0.2 || ^18.0.0
-    react-native: ^0.60.0
-  peerDependenciesMeta:
-    react:
-      optional: true
-    react-native:
-      optional: true
-  languageName: unknown
-  linkType: soft
 
 "@humanwhocodes/config-array@npm:^0.13.0":
   version: 0.13.0
