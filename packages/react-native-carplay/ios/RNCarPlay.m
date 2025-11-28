@@ -602,7 +602,10 @@ RCT_EXPORT_METHOD(createTemplate:(NSString *)templateId config:(NSDictionary*)co
     [store setTemplate:templateId template:carPlayTemplate];
 }
 
-RCT_EXPORT_METHOD(createTrip:(NSString*)tripId config:(NSDictionary*)config) {
+RCT_EXPORT_METHOD(createTrip:(NSString*)tripId
+                  config:(NSDictionary*)config
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
     @try {
         RNCPStore *store = [RNCPStore sharedManager];
         CPTrip *trip = [self parseTrip:config];
@@ -614,8 +617,10 @@ RCT_EXPORT_METHOD(createTrip:(NSString*)tripId config:(NSDictionary*)config) {
 
         [userInfo setValue:tripId forKey:@"id"];
         [store setTrip:tripId trip:trip];
+        resolve(nil);
     } @catch (NSException *e) {
         NSLog(@"[RNCarPlay] Exception in createTrip: %@", e);
+        reject(@"exception", [NSString stringWithFormat:@"Exception in createTrip: %@", e], nil);
     }
 }
 

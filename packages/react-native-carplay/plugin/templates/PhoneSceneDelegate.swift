@@ -52,11 +52,10 @@ func connectionOptions2LaunchOptions(connectionOptions: UIScene.ConnectionOption
       launchOptions[UIApplication.LaunchOptionsKey.remoteNotification] = options.notificationResponse?.notification.request.content.userInfo;
     }
 
-    if !options.userActivities.isEmpty {
-      let userActivity = options.userActivities.first;
+    if let userActivity = options.userActivities.first {
       let userActivityDictionary = [
-        "UIApplicationLaunchOptionsUserActivityTypeKey": userActivity?.activityType as Any,
-        "UIApplicationLaunchOptionsUserActivityKey": userActivity!
+        "UIApplicationLaunchOptionsUserActivityTypeKey": userActivity.activityType as Any,
+        "UIApplicationLaunchOptionsUserActivityKey": userActivity
       ] as [String : Any];
       launchOptions[UIApplication.LaunchOptionsKey.userActivityDictionary] = userActivityDictionary;
     }
