@@ -603,16 +603,20 @@ RCT_EXPORT_METHOD(createTemplate:(NSString *)templateId config:(NSDictionary*)co
 }
 
 RCT_EXPORT_METHOD(createTrip:(NSString*)tripId config:(NSDictionary*)config) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTrip *trip = [self parseTrip:config];
-    NSMutableDictionary *userInfo = trip.userInfo;
-    if (!userInfo) {
-        userInfo = [[NSMutableDictionary alloc] init];
-        trip.userInfo = userInfo;
-    }
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTrip *trip = [self parseTrip:config];
+        NSMutableDictionary *userInfo = trip.userInfo;
+        if (!userInfo) {
+            userInfo = [[NSMutableDictionary alloc] init];
+            trip.userInfo = userInfo;
+        }
 
-    [userInfo setValue:tripId forKey:@"id"];
-    [store setTrip:tripId trip:trip];
+        [userInfo setValue:tripId forKey:@"id"];
+        [store setTrip:tripId trip:trip];
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in createTrip: %@", e);
+    }
 }
 
 RCT_EXPORT_METHOD(updateTravelEstimatesForTrip:(NSString*)templateId tripId:(NSString*)tripId travelEstimates:(NSDictionary*)travelEstimates timeRemainingColor:(double)timeRemainingColor) {
@@ -642,26 +646,31 @@ RCT_REMAP_METHOD(startNavigationSession,
                  tripId:(NSString *)tripId
                  startNavigationSessionWithResolver:(RCTPromiseResolveBlock)resolve
                  rejecter:(RCTPromiseRejectBlock)reject) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
-        if (trip) {
-            CPNavigationSession *navigationSession = [[RNCPStore sharedManager] getNavigationSession];
-            if (navigationSession) {
-                [navigationSession cancelTrip];
-                [[RNCPStore sharedManager] setNavigationSession:nil];
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
+            if (trip) {
+                CPNavigationSession *navigationSession = [[RNCPStore sharedManager] getNavigationSession];
+                if (navigationSession) {
+                    [navigationSession cancelTrip];
+                    [[RNCPStore sharedManager] setNavigationSession:nil];
+                }
+
+                navigationSession = [mapTemplate startNavigationSessionForTrip:trip];
+                [store setNavigationSession:navigationSession];
+                resolve(nil);
+            } else {
+                reject(@"trip_not_found", @"Trip not found in store", nil);
             }
-            
-            navigationSession = [mapTemplate startNavigationSessionForTrip:trip];
-            [store setNavigationSession:navigationSession];
-            resolve(nil);
         } else {
-            reject(@"trip_not_found", @"Trip not found in store", nil);
+            reject(@"template_not_found", @"Template not found in store", nil);
         }
-    } else {
-        reject(@"template_not_found", @"Template not found in store", nil);
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in startNavigationSession: %@", e);
+        reject(@"exception", [NSString stringWithFormat:@"Exception in startNavigationSession: %@", e], nil);
     }
 }
 
@@ -1082,58 +1091,74 @@ RCT_EXPORT_METHOD(enableNowPlaying:(BOOL)enable) {
 }
 
 RCT_EXPORT_METHOD(hideTripPreviews:(NSString*)templateId) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        [mapTemplate hideTripPreviews];
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            [mapTemplate hideTripPreviews];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in hideTripPreviews: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(showTripPreviews:(NSString*)templateId tripIds:(NSArray*)tripIds tripConfiguration:(NSDictionary*)tripConfiguration) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    NSMutableArray *trips = [[NSMutableArray alloc] init];
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        NSMutableArray *trips = [[NSMutableArray alloc] init];
 
-    for (NSString *tripId in tripIds) {
-        CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
-        if (trip) {
-            [trips addObject:trip];
+        for (NSString *tripId in tripIds) {
+            CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
+            if (trip) {
+                [trips addObject:trip];
+            }
         }
-    }
 
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        [mapTemplate showTripPreviews:trips textConfiguration:[self parseTripPreviewTextConfiguration:tripConfiguration]];
-        lastShowTripsTime = [NSDate date];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            [mapTemplate showTripPreviews:trips textConfiguration:[self parseTripPreviewTextConfiguration:tripConfiguration]];
+            lastShowTripsTime = [NSDate date];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in showTripPreviews: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(showTripPreview:(NSString*)templateId tripIds:(NSArray*)tripIds selectedTripId:(NSString*)selectedTripId tripConfiguration:(NSDictionary*)tripConfiguration) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    NSMutableArray *trips = [[NSMutableArray alloc] init];
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        NSMutableArray *trips = [[NSMutableArray alloc] init];
 
-    for (NSString *tripId in tripIds) {
-        CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
-        if (trip) {
-            [trips addObject:trip];
+        for (NSString *tripId in tripIds) {
+            CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
+            if (trip) {
+                [trips addObject:trip];
+            }
         }
-    }
-    
-    CPTrip *selectedTrip = [[RNCPStore sharedManager] findTripById:selectedTripId];
 
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        [mapTemplate showTripPreviews:trips selectedTrip:selectedTrip textConfiguration:[self parseTripPreviewTextConfiguration:tripConfiguration]];
-        lastShowTripsTime = [NSDate date];
+        CPTrip *selectedTrip = [[RNCPStore sharedManager] findTripById:selectedTripId];
+
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            [mapTemplate showTripPreviews:trips selectedTrip:selectedTrip textConfiguration:[self parseTripPreviewTextConfiguration:tripConfiguration]];
+            lastShowTripsTime = [NSDate date];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in showTripPreview: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(showRouteChoicesPreviewForTrip:(NSString*)templateId tripId:(NSString*)tripId tripConfiguration:(NSDictionary*)tripConfiguration) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
 
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        [mapTemplate showRouteChoicesPreviewForTrip:trip textConfiguration:[self parseTripPreviewTextConfiguration:tripConfiguration]];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            [mapTemplate showRouteChoicesPreviewForTrip:trip textConfiguration:[self parseTripPreviewTextConfiguration:tripConfiguration]];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in showRouteChoicesPreviewForTrip: %@", e);
     }
 }
 

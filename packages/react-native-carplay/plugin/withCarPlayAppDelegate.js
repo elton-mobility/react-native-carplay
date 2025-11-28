@@ -125,14 +125,11 @@ function restructureApplicationMethod(contents) {
   const appDelegatePattern = /public\s+override\s+func\s+application\s*\([^{]*\)\s*->\s*Bool\s*\{[\s\S]*?return[^}]*\}/;
 
   if (contents.match(appDelegatePattern)) {
-    // Two-phase initialization:
-    // 1. prepareRN() BEFORE super - binds factory for expo-dev-launcher
-    // 2. startRN() AFTER super - starts RN after Firebase is initialized
+    // expo-dev-launcher requires React Native to be fully started (including startReactNative)
+    // BEFORE super.application() is called. The factory must be bound AND RN must be started.
     const newApplicationMethod = `public override func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
-    prepareRN()
-    let result = super.application(application, didFinishLaunchingWithOptions: launchOptions)
-    startRN(launchOptions: launchOptions)
-    return result
+    initRN(launchOptions: launchOptions)
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }`;
 
     contents = contents.replace(appDelegatePattern, newApplicationMethod);
@@ -158,19 +155,19 @@ function removeExistingCarPlayMethods(contents) {
 }
 
 /**
- * Adds the React Native initialization functions (two-phase)
- * - prepareRN(): Called BEFORE super.application() - binds factory for expo-dev-launcher
- * - startRN(): Called AFTER super.application() - starts RN after Firebase initializes
+ * Adds the React Native initialization function
+ * This must be called BEFORE super.application() because expo-dev-launcher
+ * requires both bindReactNativeFactory() AND startReactNative() to complete first.
  */
 function addReactNativeInitFunction(contents) {
-  if (contents.includes("func prepareRN(")) {
+  if (contents.includes("func initRN(")) {
     return contents; // Already exists
   }
 
-  const initFunctions = `  // Phase 1: Prepare RN factory BEFORE super.application()
-  // This is required because expo-dev-launcher needs the factory bound
+  const initFunction = `  // Initialize React Native - must happen BEFORE super.application()
+  // expo-dev-launcher requires the factory to be bound AND RN to be started
   // before autoSetupStart() is called in super.application()
-  func prepareRN() {
+  func initRN(launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) {
     if (initialized) { return }
     initialized = true
     let delegate = ReactNativeDelegate()
@@ -180,15 +177,14 @@ function addReactNativeInitFunction(contents) {
     reactNativeDelegate = delegate
     reactNativeFactory = factory
     bindReactNativeFactory(factory)
-  }
-
-  // Phase 2: Start RN AFTER super.application()
-  // This ensures Firebase and other Expo modules are initialized first
-  func startRN(launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) {
-    guard let factory = reactNativeFactory else { return }
 
     #if os(iOS) || os(tvOS)
       window = UIWindow(frame: UIScreen.main.bounds)
+      // Initialize Firebase if available - this normally happens in super.application()
+      // but we need to start RN before that, so we do it here
+      if FirebaseApp.app() == nil {
+        FirebaseApp.configure()
+      }
       factory.startReactNative(
         withModuleName: "main",
         in: window,
@@ -200,15 +196,15 @@ function addReactNativeInitFunction(contents) {
   const applicationEndPattern = /application\([^{]*didFinishLaunchingWithOptions[^{]*\{[^}]*return[^}]*\}/;
 
   if (contents.match(applicationEndPattern)) {
-    contents = contents.replace(applicationEndPattern, match => `${match}\n\n${initFunctions}`);
+    contents = contents.replace(applicationEndPattern, match => `${match}\n\n${initFunction}`);
   } else {
     // Fallback: add before Linking API section
     const linkingApiPattern = /\/\/\s*Linking API/;
 
     if (contents.match(linkingApiPattern)) {
-      contents = contents.replace(linkingApiPattern, `${initFunctions}\n\n  // Linking API`);
+      contents = contents.replace(linkingApiPattern, `${initFunction}\n\n  // Linking API`);
     } else {
-      throw new Error("[CarPlay Plugin] Could not find suitable location to add init functions");
+      throw new Error("[CarPlay Plugin] Could not find suitable location to add init function");
     }
   }
 

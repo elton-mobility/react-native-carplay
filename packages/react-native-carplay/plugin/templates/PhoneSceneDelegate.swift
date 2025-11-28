@@ -8,8 +8,7 @@ class PhoneSceneDelegate: UIResponder, UIWindowSceneDelegate {
 
   func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
     guard let appDelegate = UIApplication.shared.delegate as? AppDelegate else { return }
-    appDelegate.prepareRN()
-    appDelegate.startRN(launchOptions: connectionOptions2LaunchOptions(connectionOptions: connectionOptions))
+    appDelegate.initRN(launchOptions: connectionOptions2LaunchOptions(connectionOptions: connectionOptions))
 
     guard let windowScene = scene as? UIWindowScene else { return }
     guard let appRootView = appDelegate.window?.rootViewController?.view else { return }
