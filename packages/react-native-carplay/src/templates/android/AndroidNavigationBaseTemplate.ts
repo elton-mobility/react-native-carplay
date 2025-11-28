@@ -6,10 +6,10 @@ import {
   PanGestureWithTranslationEvent,
   PinchGestureEvent,
   PressEvent,
-} from 'src/interfaces/GestureEvent';
+} from '../../interfaces/GestureEvent';
 import { Action, AndroidAction, getCallbackActionId } from '../../interfaces/Action';
-import { Pane } from 'src/interfaces/Pane';
-import { AndroidGridButton, GridButton } from 'src/interfaces/GridButton';
+import { Pane } from '../../interfaces/Pane';
+import { AndroidGridButton, GridButton } from '../../interfaces/GridButton';
 
 export interface AndroidNavigationBaseTemplateConfig extends TemplateConfig {
   /**

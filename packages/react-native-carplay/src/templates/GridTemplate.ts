@@ -1,4 +1,4 @@
-import { Action } from 'src/interfaces/Action';
+import { Action } from '../interfaces/Action';
 import { GridButton } from '../interfaces/GridButton';
 import { BaseEvent, Template, TemplateConfig } from './Template';
 

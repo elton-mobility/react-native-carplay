@@ -1,6 +1,6 @@
 import { AppRegistry, Image, Platform, type NativeEventEmitter } from 'react-native';
-import { AndroidClusterConfig, ClusterConfig } from 'src/interfaces/Cluster';
-import type { InternalCarPlay } from 'src/interfaces/InternalCarPlay';
+import { AndroidClusterConfig, ClusterConfig } from '../interfaces/Cluster';
+import type { InternalCarPlay } from '../interfaces/InternalCarPlay';
 
 type Events =
   | 'onDisconnect'

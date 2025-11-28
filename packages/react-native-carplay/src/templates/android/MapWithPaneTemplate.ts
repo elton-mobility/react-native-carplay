@@ -5,7 +5,7 @@ import {
   AndroidNavigationBaseTemplateConfig,
 } from './AndroidNavigationBaseTemplate';
 import { PaneTemplateConfig } from './PaneTemplate';
-import { Pane } from 'src/interfaces/Pane';
+import { Pane } from '../../interfaces/Pane';
 
 export type MapWithPaneTemplateConfig = AndroidNavigationBaseTemplateConfig &
   Omit<PaneTemplateConfig, 'actions' | 'onActionButtonPressed'> & {
