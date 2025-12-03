@@ -153,6 +153,34 @@ If upgrading from an older version:
 3. Test all CarPlay/Android Auto functionality
 4. Update any deprecated API usage
 
+## Creating a New Release
+
+This fork is used by the Elton app via a GitHub release tarball. To create a new release:
+
+1. **Make your changes** and commit them to master
+
+2. **Update the version** in `package.json`
+
+3. **Build the package**:
+   ```bash
+   cd packages/react-native-carplay
+   yarn build && yarn build:plugin
+   ```
+
+4. **Create the tarball**:
+   ```bash
+   npm pack
+   ```
+
+5. **Create a GitHub release** with the tarball:
+   ```bash
+   gh release create v1.x.x --title "v1.x.x - Description" \
+     --notes "Release notes here" \
+     elton-mobility-react-native-carplay-1.x.x.tgz
+   ```
+
+6. **Update the Elton app** `package.json` to reference the new release URL
+
 ## Contributing
 
 We welcome contributions! Please read our contributing guidelines and submit pull requests to the main repository.
