@@ -50,6 +50,9 @@
     "url": "https://github.com/elton-mobility/react-native-carplay/issues"
   },
   "homepage": "https://github.com/elton-mobility/react-native-carplay#readme",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0",
     "react-native": "^0.74.0 || ^0.76.0 || ^0.79.0 || ^0.81.0"
