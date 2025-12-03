@@ -10,11 +10,19 @@ import React
 
 @objc(RNCarPlayViewController)
 public class RNCarPlayViewController: UIViewController {
-    let rootView: RCTRootView
+    let rootView: UIView
+    let moduleName: String
     
-    @objc public init(rootView: RCTRootView) {
+    /// New Architecture compatible initializer - accepts any UIView
+    @objc public init(rootView: UIView, moduleName: String) {
         self.rootView = rootView
+        self.moduleName = moduleName
         super.init(nibName: nil, bundle: nil)
+    }
+
+    /// Old Architecture initializer - accepts RCTRootView
+    @objc public convenience init(rootView: RCTRootView) {
+        self.init(rootView: rootView as UIView, moduleName: rootView.moduleName ?? "")
     }
 
     required init?(coder: NSCoder) {
@@ -24,14 +32,21 @@ public class RNCarPlayViewController: UIViewController {
     public override func viewDidLoad() {
         super.viewDidLoad()
 
-        self.view.translatesAutoresizingMaskIntoConstraints = false
-        self.rootView.frame = self.view.bounds
-        self.view = rootView
+        // Add rootView as a subview with proper constraints
+        rootView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(rootView)
+
+        NSLayoutConstraint.activate([
+            rootView.topAnchor.constraint(equalTo: view.topAnchor),
+            rootView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            rootView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            rootView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
     }
 
     public override func viewWillLayoutSubviews() {
         super.viewWillLayoutSubviews()
-        self.rootView.frame = self.view.bounds
+        // Layout is handled by constraints now
     }
 
     public override func viewDidLayoutSubviews() {
@@ -44,7 +59,7 @@ public class RNCarPlayViewController: UIViewController {
                 "left": self.view.safeAreaInsets.left,
                 "right": self.view.safeAreaInsets.right,
                 "top": self.view.safeAreaInsets.top,
-                "id": self.rootView.moduleName,
+                "id": self.moduleName,
             ])
     }
 
@@ -60,12 +75,12 @@ public class RNCarPlayViewController: UIViewController {
                 body: [
                     "colorScheme": traitCollection.userInterfaceStyle == .dark
                         ? "dark" : "light",
-                    "id": self.rootView.moduleName,
+                    "id": self.moduleName,
                 ])
         }
     }
     
     deinit {
-        self.view = nil
+        rootView.removeFromSuperview()
     }
 }

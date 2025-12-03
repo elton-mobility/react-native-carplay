@@ -1,6 +1,10 @@
 #import "RNCarPlay.h"
 #import <React/RCTConvert.h>
 #import <React/RCTRootView.h>
+#import <React/RCTUtils.h>
+#import <React/RCTSurfaceHostingProxyRootView.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 #import "react_native_carplay/react_native_carplay-Swift.h"
 
 static NSMutableDictionary<NSNumber *, CPNavigationAlert *> *navigationAlertWrappers;
@@ -60,6 +64,93 @@ static NSMutableDictionary<NSNumber *, CPNavigationAlert *> *navigationAlertWrap
         store.app = [[RNCarPlayApp alloc] init];
     }
     [store.app connectSceneWithInterfaceController:interfaceController window:window];
+
+    // Check if we have a pending fabric surface to create (bridgeless mode)
+    [self createPendingFabricSurfaceWithWindow:window];
+}
+
++ (void) createPendingFabricSurfaceWithWindow:(CPWindow*)window {
+    RNCPStore *store = [RNCPStore sharedManager];
+    id surfacePresenter = objc_getAssociatedObject(store.app, "surfacePresenter");
+    NSString *moduleName = objc_getAssociatedObject(store.app, "pendingModuleName");
+
+    if (surfacePresenter == nil || moduleName == nil) {
+        return;
+    }
+
+    // Clear the pending state
+    objc_setAssociatedObject(store.app, "surfacePresenter", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(store.app, "pendingModuleName", nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ((RNCarPlayApp *)store.app).hasPendingFabricSurface = NO;
+
+    // Create the FabricSurface dynamically using Objective-C runtime
+    Class RCTFabricSurfaceClass = NSClassFromString(@"RCTFabricSurface");
+    if (RCTFabricSurfaceClass == nil) {
+        return;
+    }
+
+    // Determine color scheme from window
+    NSString *colorScheme = window.screen.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark ? @"dark" : @"light";
+
+    NSDictionary *initialProps = @{
+        @"id": moduleName,
+        @"colorScheme": colorScheme,
+        @"window": @{
+            @"height": @(window.bounds.size.height),
+            @"width": @(window.bounds.size.width),
+            @"scale": @(window.screen.scale)
+        }
+    };
+
+    // Create instance using alloc + initWithSurfacePresenter:moduleName:initialProperties:
+    id fabricSurface = [RCTFabricSurfaceClass alloc];
+    SEL initSelector = NSSelectorFromString(@"initWithSurfacePresenter:moduleName:initialProperties:");
+
+    if (![fabricSurface respondsToSelector:initSelector]) {
+        return;
+    }
+
+    NSMethodSignature *sig = [fabricSurface methodSignatureForSelector:initSelector];
+    NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:sig];
+    [invocation setTarget:fabricSurface];
+    [invocation setSelector:initSelector];
+    [invocation setArgument:&surfacePresenter atIndex:2];
+    [invocation setArgument:&moduleName atIndex:3];
+    [invocation setArgument:&initialProps atIndex:4];
+    [invocation invoke];
+    [invocation getReturnValue:&fabricSurface];
+
+    // Set the size to match the window
+    SEL setSizeSelector = NSSelectorFromString(@"setSize:");
+    if ([fabricSurface respondsToSelector:setSizeSelector]) {
+        CGSize windowSize = window.bounds.size;
+        NSMethodSignature *sizeSig = [fabricSurface methodSignatureForSelector:setSizeSelector];
+        NSInvocation *sizeInvocation = [NSInvocation invocationWithMethodSignature:sizeSig];
+        [sizeInvocation setTarget:fabricSurface];
+        [sizeInvocation setSelector:setSizeSelector];
+        [sizeInvocation setArgument:&windowSize atIndex:2];
+        [sizeInvocation invoke];
+    }
+
+    // Start the surface - required for Fabric surfaces to begin rendering
+    SEL startSelector = NSSelectorFromString(@"start");
+    if ([fabricSurface respondsToSelector:startSelector]) {
+        [fabricSurface performSelector:startSelector];
+    }
+
+    // Get the view
+    SEL viewSelector = NSSelectorFromString(@"view");
+    if (![fabricSurface respondsToSelector:viewSelector]) {
+        return;
+    }
+
+    UIView *surfaceView = [fabricSurface performSelector:viewSelector];
+
+    // Store the fabricSurface to prevent deallocation
+    objc_setAssociatedObject(store.app, "fabricSurface", fabricSurface, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    // Pass the view to Swift - use the new method that sets up the view immediately
+    [store.app connectWithFabricViewWithFabricView:surfaceView moduleName:moduleName];
 }
 
 + (void) disconnect {
@@ -265,10 +356,14 @@ RCT_EXPORT_MODULE();
 }
 
 RCT_EXPORT_METHOD(checkForConnection) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    RNCarPlayApp* app = store.app;
-    if (app.isConnected && hasListeners) {
-        [self sendEventWithName:@"didConnect" body:[app getConnectedWindowInformation]];
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        RNCarPlayApp* app = store.app;
+        if (app.isConnected && hasListeners) {
+            [self sendEventWithName:@"didConnect" body:[app getConnectedWindowInformation]];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in checkForConnection: %@", e);
     }
 }
 
@@ -508,28 +603,41 @@ RCT_EXPORT_METHOD(createTemplate:(NSString *)templateId config:(NSDictionary*)co
 }
 
 RCT_EXPORT_METHOD(createTrip:(NSString*)tripId config:(NSDictionary*)config) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTrip *trip = [self parseTrip:config];
-    NSMutableDictionary *userInfo = trip.userInfo;
-    if (!userInfo) {
-        userInfo = [[NSMutableDictionary alloc] init];
-        trip.userInfo = userInfo;
-    }
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTrip *trip = [self parseTrip:config];
+        NSMutableDictionary *userInfo = trip.userInfo;
+        if (!userInfo) {
+            userInfo = [[NSMutableDictionary alloc] init];
+            trip.userInfo = userInfo;
+        }
 
-    [userInfo setValue:tripId forKey:@"id"];
-    [store setTrip:tripId trip:trip];
+        [userInfo setValue:tripId forKey:@"id"];
+        [store setTrip:tripId trip:trip];
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in createTrip: %@", e);
+    }
 }
 
-RCT_EXPORT_METHOD(updateTravelEstimatesForTrip:(NSString*)templateId tripId:(NSString*)tripId travelEstimates:(NSDictionary*)travelEstimates timeRemainingColor:(NSUInteger*)timeRemainingColor) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
-        if (trip) {
-            CPTravelEstimates *estimates = [self parseTravelEstimates:travelEstimates];
-            [mapTemplate updateTravelEstimates:estimates forTrip:trip withTimeRemainingColor:(CPTimeRemainingColor) timeRemainingColor];
+RCT_EXPORT_METHOD(updateTravelEstimatesForTrip:(NSString*)templateId tripId:(NSString*)tripId travelEstimates:(NSDictionary*)travelEstimates timeRemainingColor:(double)timeRemainingColor) {
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
+            if (trip) {
+                NSLog(@"[RNCarPlay] updateTravelEstimatesForTrip: updating trip %@", tripId);
+                CPTravelEstimates *estimates = [self parseTravelEstimates:travelEstimates];
+                [mapTemplate updateTravelEstimates:estimates forTrip:trip withTimeRemainingColor:(CPTimeRemainingColor)(NSUInteger)timeRemainingColor];
+            } else {
+                NSLog(@"[RNCarPlay] updateTravelEstimatesForTrip: trip %@ not found!", tripId);
+            }
+        } else {
+            NSLog(@"[RNCarPlay] updateTravelEstimatesForTrip: template %@ not found!", templateId);
         }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateTravelEstimatesForTrip: %@", e);
     }
 }
 
@@ -538,307 +646,403 @@ RCT_REMAP_METHOD(startNavigationSession,
                  tripId:(NSString *)tripId
                  startNavigationSessionWithResolver:(RCTPromiseResolveBlock)resolve
                  rejecter:(RCTPromiseRejectBlock)reject) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
-        if (trip) {
-            CPNavigationSession *navigationSession = [[RNCPStore sharedManager] getNavigationSession];
-            if (navigationSession) {
-                [navigationSession cancelTrip];
-                [[RNCPStore sharedManager] setNavigationSession:nil];
-            }
+    @try {
+        NSLog(@"[RNCarPlay] startNavigationSession: starting for template %@, trip %@", templateId, tripId);
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
+            if (trip) {
+                CPNavigationSession *navigationSession = [[RNCPStore sharedManager] getNavigationSession];
+                if (navigationSession) {
+                    NSLog(@"[RNCarPlay] startNavigationSession: cancelling existing session");
+                    [navigationSession cancelTrip];
+                    [[RNCPStore sharedManager] setNavigationSession:nil];
+                }
             
-            navigationSession = [mapTemplate startNavigationSessionForTrip:trip];
-            [store setNavigationSession:navigationSession];
-            resolve(nil);
+                navigationSession = [mapTemplate startNavigationSessionForTrip:trip];
+                [store setNavigationSession:navigationSession];
+                NSLog(@"[RNCarPlay] startNavigationSession: session created successfully: %@", navigationSession);
+                resolve(nil);
+            } else {
+                NSLog(@"[RNCarPlay] startNavigationSession: trip %@ not found!", tripId);
+                reject(@"trip_not_found", @"Trip not found in store", nil);
+            }
         } else {
-            reject(@"trip_not_found", @"Trip not found in store", nil);
+            NSLog(@"[RNCarPlay] startNavigationSession: template %@ not found!", templateId);
+            reject(@"template_not_found", @"Template not found in store", nil);
         }
-    } else {
-        reject(@"template_not_found", @"Template not found in store", nil);
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in startNavigationSession: %@", e);
+        reject(@"exception", [e reason], nil);
     }
 }
 
 RCT_EXPORT_METHOD(updateManeuvers:(NSArray*)maneuvers) {
-    CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
-    if (navigationSession) {
-        NSMutableArray<CPManeuver*>* upcomingManeuvers = [NSMutableArray array];
-        if (@available(iOS 18.0, *)) {
-            NSMutableArray<CPLaneGuidance*>* upcomingLaneGuidances = [NSMutableArray array];
-            for (NSDictionary *maneuver in maneuvers) {
-                CPManeuver *parsedManeuver = [self parseManeuver:maneuver];
-                CPLaneGuidance *parsedLaneGuidance = [self parseLaneGuidance:maneuver];
-                if (parsedLaneGuidance != nil) {
-                    parsedManeuver.linkedLaneGuidance = parsedLaneGuidance;
-                    [upcomingLaneGuidances addObject:parsedLaneGuidance];
-                }
+    @try {
+        CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
+        if (navigationSession) {
+            NSLog(@"[RNCarPlay] updateManeuvers: session exists, updating %lu maneuvers", (unsigned long)maneuvers.count);
+            NSMutableArray<CPManeuver*>* upcomingManeuvers = [NSMutableArray array];
+            if (@available(iOS 18.0, *)) {
+                NSMutableArray<CPLaneGuidance*>* upcomingLaneGuidances = [NSMutableArray array];
+                for (NSDictionary *maneuver in maneuvers) {
+                    CPManeuver *parsedManeuver = [self parseManeuver:maneuver];
+                    CPLaneGuidance *parsedLaneGuidance = [self parseLaneGuidance:maneuver];
+                    if (parsedLaneGuidance != nil) {
+                        parsedManeuver.linkedLaneGuidance = parsedLaneGuidance;
+                        [upcomingLaneGuidances addObject:parsedLaneGuidance];
+                    }
                 
-                [upcomingManeuvers addObject:parsedManeuver];
+                    [upcomingManeuvers addObject:parsedManeuver];
+                }
+                [navigationSession addLaneGuidances:upcomingLaneGuidances];
+                [navigationSession setCurrentLaneGuidance:upcomingLaneGuidances.lastObject];
+            } else {
+                for (NSDictionary *maneuver in maneuvers) {
+                    [upcomingManeuvers addObject:[self parseManeuver:maneuver]];
+                }
             }
-            [navigationSession addLaneGuidances:upcomingLaneGuidances];
-            [navigationSession setCurrentLaneGuidance:upcomingLaneGuidances.lastObject];
-        } else {
-            for (NSDictionary *maneuver in maneuvers) {
-                [upcomingManeuvers addObject:[self parseManeuver:maneuver]];
-            }
-        }
-        
-        if (@available(iOS 17.4, *)) {
-            // disgusting workaround to prevent crashes on iOS < 17.4 even though this should be supported since iOS 12 according to Apple docs
-            [navigationSession addManeuvers:upcomingManeuvers];
-        }
 
-        [navigationSession setUpcomingManeuvers:upcomingManeuvers];
+            if (@available(iOS 17.4, *)) {
+                // disgusting workaround to prevent crashes on iOS < 17.4 even though this should be supported since iOS 12 according to Apple docs
+                [navigationSession addManeuvers:upcomingManeuvers];
+            }
+        
+            [navigationSession setUpcomingManeuvers:upcomingManeuvers];
+        } else {
+            NSLog(@"[RNCarPlay] updateManeuvers: navigationSession is NIL! Data dropped.");
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateManeuvers: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(updateTravelEstimatesNavigationSession:(NSUInteger)maneuverIndex travelEstimates:(NSDictionary*)travelEstimates) {
-    CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
-    if (navigationSession) {
-        CPManeuver *maneuver = [[navigationSession upcomingManeuvers] objectAtIndex:maneuverIndex];
-        if (maneuver) {
-            [navigationSession updateTravelEstimates:[self parseTravelEstimates:travelEstimates] forManeuver:maneuver];
+    @try {
+        CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
+        if (navigationSession) {
+            NSArray *maneuvers = [navigationSession upcomingManeuvers];
+            if (maneuverIndex < maneuvers.count) {
+                CPManeuver *maneuver = [maneuvers objectAtIndex:maneuverIndex];
+                if (maneuver) {
+                    NSLog(@"[RNCarPlay] updateTravelEstimatesNavigationSession: updating maneuver %lu", (unsigned long)maneuverIndex);
+                    [navigationSession updateTravelEstimates:[self parseTravelEstimates:travelEstimates] forManeuver:maneuver];
+                }
+            } else {
+                NSLog(@"[RNCarPlay] updateTravelEstimatesNavigationSession: maneuverIndex %lu out of bounds (count: %lu)", (unsigned long)maneuverIndex, (unsigned long)maneuvers.count);
+            }
+        } else {
+            NSLog(@"[RNCarPlay] updateTravelEstimatesNavigationSession: navigationSession is NIL! Data dropped.");
         }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateTravelEstimatesNavigationSession: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(pauseNavigationSession:(NSUInteger*)reason description:(NSString*)description resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
-    CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
-    if (navigationSession) {
-        [navigationSession pauseTripForReason:(CPTripPauseReason) reason description:description];
-        resolve(nil);
-    } else {
-        reject(@"no_session", @"Could not pause. No session found.", nil);
+    @try {
+        CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
+        if (navigationSession) {
+            [navigationSession pauseTripForReason:(CPTripPauseReason) reason description:description];
+            resolve(nil);
+        } else {
+            reject(@"no_session", @"Could not pause. No session found.", nil);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in pauseNavigationSession: %@", e);
+        reject(@"exception", [e reason], nil);
     }
 }
 
 RCT_EXPORT_METHOD(cancelNavigationSession:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
-    CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
-    if (navigationSession) {
-        [navigationSession cancelTrip];
-        [[RNCPStore sharedManager] setNavigationSession:nil];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            resolve(nil);
-        });
-    } else {
-        reject(@"no_session", @"Could not cancel. No session found.", nil);
+    @try {
+        CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
+        if (navigationSession) {
+            [navigationSession cancelTrip];
+            [[RNCPStore sharedManager] setNavigationSession:nil];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                resolve(nil);
+            });
+        } else {
+            reject(@"no_session", @"Could not cancel. No session found.", nil);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in cancelNavigationSession: %@", e);
+        reject(@"exception", [e reason], nil);
     }
 }
 
 RCT_EXPORT_METHOD(finishNavigationSession:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject) {
-    CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
-    if (navigationSession) {
-        [navigationSession finishTrip];
-        [[RNCPStore sharedManager] setNavigationSession:nil];
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            resolve(nil);
-        });
-    } else {
-        reject(@"no_session", @"Could not finish. No session found.", nil);
+    @try {
+        CPNavigationSession* navigationSession = [[RNCPStore sharedManager] getNavigationSession];
+        if (navigationSession) {
+            [navigationSession finishTrip];
+            [[RNCPStore sharedManager] setNavigationSession:nil];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                resolve(nil);
+            });
+        } else {
+            reject(@"no_session", @"Could not finish. No session found.", nil);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in finishNavigationSession: %@", e);
+        reject(@"exception", [e reason], nil);
     }
 }
 
 RCT_EXPORT_METHOD(setRootTemplate:(NSString *)templateId animated:(BOOL)animated) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    RNCarPlayApp* app = store.app;
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        RNCarPlayApp* app = store.app;
 
-    store.rootTemplateId = templateId;
+        store.rootTemplateId = templateId;
 
-    if (template) {
-        [app.interfaceController setRootTemplate:template animated:animated completion:^(BOOL done, NSError * _Nullable err) {
-            NSLog(@"error %@", err);
-            // noop
-        }];
-    } else {
-        NSLog(@"Failed to find template %@", template);
+        if (template) {
+            [app.interfaceController setRootTemplate:template animated:animated completion:^(BOOL done, NSError * _Nullable err) {
+                NSLog(@"error %@", err);
+                // noop
+            }];
+        } else {
+            NSLog(@"Failed to find template %@", template);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in setRootTemplate: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(pushTemplate:(NSString *)templateId animated:(BOOL)animated) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    RNCarPlayApp* app = store.app;
-    if (template) {
-        [app.interfaceController pushTemplate:template animated:animated completion:^(BOOL done, NSError * _Nullable err) {
-            NSLog(@"error %@", err);
-            // noop
-        }];
-    } else {
-        NSLog(@"Failed to find template %@", template);
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        RNCarPlayApp* app = store.app;
+        if (template) {
+            [app.interfaceController pushTemplate:template animated:animated completion:^(BOOL done, NSError * _Nullable err) {
+                NSLog(@"error %@", err);
+                // noop
+            }];
+        } else {
+            NSLog(@"Failed to find template %@", template);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in pushTemplate: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(popToTemplate:(NSString *)templateId animated:(BOOL)animated) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    RNCarPlayApp* app = store.app;
-    if (template) {
-        [app.interfaceController popToTemplate:template animated:animated completion:^(BOOL done, NSError * _Nullable err) {
-            NSLog(@"error %@", err);
-            // noop
-        }];
-    } else {
-        NSLog(@"Failed to find template %@", template);
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        RNCarPlayApp* app = store.app;
+        if (template) {
+            [app.interfaceController popToTemplate:template animated:animated completion:^(BOOL done, NSError * _Nullable err) {
+                NSLog(@"error %@", err);
+                // noop
+            }];
+        } else {
+            NSLog(@"Failed to find template %@", template);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in popToTemplate: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(popToRootTemplate:(BOOL)animated) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    RNCarPlayApp* app = store.app;
-    [app.interfaceController popToRootTemplateAnimated:animated completion:^(BOOL done, NSError * _Nullable err) {
-        NSLog(@"error %@", err);
-        if (done) {
-            for (NSString *templateId in store.getTemplateIds) {
-                if (templateId == store.rootTemplateId) {
-                    continue;
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        RNCarPlayApp* app = store.app;
+        [app.interfaceController popToRootTemplateAnimated:animated completion:^(BOOL done, NSError * _Nullable err) {
+            NSLog(@"error %@", err);
+            if (done) {
+                for (NSString *templateId in store.getTemplateIds) {
+                    if (templateId == store.rootTemplateId) {
+                        continue;
+                    }
+                    [self sendEventWithName:@"poppedToRoot" body:@{ @"templateId": templateId }];
                 }
-                [self sendEventWithName:@"poppedToRoot" body:@{ @"templateId": templateId }];
             }
-        }
-    }];
+        }];
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in popToRootTemplate: %@", e);
+    }
 }
 
 RCT_EXPORT_METHOD(popTemplate:(BOOL)animated) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    RNCarPlayApp* app = store.app;
-    [app.interfaceController popTemplateAnimated:animated completion:^(BOOL done, NSError * _Nullable err) {
-        NSLog(@"error %@", err);
-        // noop
-    }];
-}
-
-RCT_EXPORT_METHOD(presentTemplate:(NSString *)templateId animated:(BOOL)animated) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    RNCarPlayApp* app = store.app;
-    if (template) {
-        [app.interfaceController presentTemplate:template animated:animated completion:^(BOOL done, NSError * _Nullable err) {
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        RNCarPlayApp* app = store.app;
+        [app.interfaceController popTemplateAnimated:animated completion:^(BOOL done, NSError * _Nullable err) {
             NSLog(@"error %@", err);
             // noop
         }];
-    } else {
-        NSLog(@"Failed to find template %@", template);
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in popTemplate: %@", e);
+    }
+}
+
+RCT_EXPORT_METHOD(presentTemplate:(NSString *)templateId animated:(BOOL)animated) {
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        RNCarPlayApp* app = store.app;
+        if (template) {
+            [app.interfaceController presentTemplate:template animated:animated completion:^(BOOL done, NSError * _Nullable err) {
+                NSLog(@"error %@", err);
+                // noop
+            }];
+        } else {
+            NSLog(@"Failed to find template %@", template);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in presentTemplate: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(dismissTemplate:(BOOL)animated) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    RNCarPlayApp* app = store.app;
-    [app.interfaceController dismissTemplateAnimated:animated];
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        RNCarPlayApp* app = store.app;
+        [app.interfaceController dismissTemplateAnimated:animated];
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in dismissTemplate: %@", e);
+    }
 }
 
 RCT_EXPORT_METHOD(updateListTemplate:(NSString*)templateId config:(NSDictionary*)config) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    if (template && [template isKindOfClass:[CPListTemplate class]]) {
-        CPListTemplate *listTemplate = (CPListTemplate *)template;
-        if (config[@"leadingNavigationBarButtons"]) {
-            NSArray *leadingNavigationBarButtons = [self parseBarButtons:[RCTConvert NSArray:config[@"leadingNavigationBarButtons"]] templateId:templateId];
-            [listTemplate setLeadingNavigationBarButtons:leadingNavigationBarButtons];
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        if (template && [template isKindOfClass:[CPListTemplate class]]) {
+            CPListTemplate *listTemplate = (CPListTemplate *)template;
+            if (config[@"leadingNavigationBarButtons"]) {
+                NSArray *leadingNavigationBarButtons = [self parseBarButtons:[RCTConvert NSArray:config[@"leadingNavigationBarButtons"]] templateId:templateId];
+                [listTemplate setLeadingNavigationBarButtons:leadingNavigationBarButtons];
+            }
+            if (config[@"trailingNavigationBarButtons"]) {
+                NSArray *trailingNavigationBarButtons = [self parseBarButtons:[RCTConvert NSArray:config[@"trailingNavigationBarButtons"]] templateId:templateId];
+                [listTemplate setTrailingNavigationBarButtons:trailingNavigationBarButtons];
+            }
+            if (config[@"emptyViewTitleVariants"]) {
+                listTemplate.emptyViewTitleVariants = [RCTConvert NSArray:config[@"emptyViewTitleVariants"]];
+            }
+            if (config[@"emptyViewSubtitleVariants"]) {
+                NSLog(@"%@", [RCTConvert NSArray:config[@"emptyViewSubtitleVariants"]]);
+                listTemplate.emptyViewSubtitleVariants = [RCTConvert NSArray:config[@"emptyViewSubtitleVariants"]];
+            }
         }
-        if (config[@"trailingNavigationBarButtons"]) {
-            NSArray *trailingNavigationBarButtons = [self parseBarButtons:[RCTConvert NSArray:config[@"trailingNavigationBarButtons"]] templateId:templateId];
-            [listTemplate setTrailingNavigationBarButtons:trailingNavigationBarButtons];
-        }
-        if (config[@"emptyViewTitleVariants"]) {
-            listTemplate.emptyViewTitleVariants = [RCTConvert NSArray:config[@"emptyViewTitleVariants"]];
-        }
-        if (config[@"emptyViewSubtitleVariants"]) {
-            NSLog(@"%@", [RCTConvert NSArray:config[@"emptyViewSubtitleVariants"]]);
-            listTemplate.emptyViewSubtitleVariants = [RCTConvert NSArray:config[@"emptyViewSubtitleVariants"]];
-        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateListTemplate: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(updateTabBarTemplates:(NSString *)templateId templates:(NSDictionary*)config) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    if (template) {
-        CPTabBarTemplate *tabBarTemplate = (CPTabBarTemplate*) template;
-        [tabBarTemplate updateTemplates:[self parseTemplatesFrom:config]];
-    } else {
-        NSLog(@"Failed to find template %@", template);
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        if (template) {
+            CPTabBarTemplate *tabBarTemplate = (CPTabBarTemplate*) template;
+            [tabBarTemplate updateTemplates:[self parseTemplatesFrom:config]];
+        } else {
+            NSLog(@"Failed to find template %@", template);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateTabBarTemplates: %@", e);
     }
 }
 
 
 RCT_EXPORT_METHOD(updateListTemplateSections:(NSString *)templateId sections:(NSArray*)sections) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    if (template) {
-        CPListTemplate *listTemplate = (CPListTemplate*) template;
-        [listTemplate updateSections:[self parseSections:sections templateId:templateId]];
-    } else {
-        NSLog(@"Failed to find template %@", template);
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        if (template) {
+            CPListTemplate *listTemplate = (CPListTemplate*) template;
+            [listTemplate updateSections:[self parseSections:sections templateId:templateId]];
+        } else {
+            NSLog(@"Failed to find template %@", template);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateListTemplateSections: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(updateListTemplateItem:(NSString *)templateId config:(NSDictionary*)config) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    if (template) {
-        CPListTemplate *listTemplate = (CPListTemplate*) template;
-        NSInteger sectionIndex = [RCTConvert NSInteger:config[@"sectionIndex"]];
-        if (sectionIndex >= listTemplate.sections.count) {
-            NSLog(@"Failed to update item at section %d, sections size is %d", index, listTemplate.sections.count);
-            return;
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        if (template) {
+            CPListTemplate *listTemplate = (CPListTemplate*) template;
+            NSInteger sectionIndex = [RCTConvert NSInteger:config[@"sectionIndex"]];
+            if (sectionIndex >= listTemplate.sections.count) {
+                NSLog(@"Failed to update item at section %d, sections size is %d", index, listTemplate.sections.count);
+                return;
+            }
+            CPListSection *section = listTemplate.sections[sectionIndex];
+            NSInteger index = [RCTConvert NSInteger:config[@"itemIndex"]];
+            if (index >= section.items.count) {
+                NSLog(@"Failed to update item at index %d, section size is %d", index, section.items.count);
+                return;
+            }
+            CPListItem *item = (CPListItem *)section.items[index];
+            if (config[@"imgUrl"]) {
+                NSString *imgUrlString = [RCTConvert NSString:config[@"imgUrl"]];
+                [self updateItemImageWithURL:item imgUrl:imgUrlString];
+            }
+            if (config[@"image"]) {
+                [item setImage:[RCTConvert UIImage:config[@"image"]]];
+            }
+            if (config[@"text"]) {
+                [item setText:[RCTConvert NSString:config[@"text"]]];
+            }
+            if (config[@"detailText"]) {
+                [item setDetailText:[RCTConvert NSString:config[@"detailText"]]];
+            }
+            if (config[@"isPlaying"]) {
+                [item setPlaying:[RCTConvert BOOL:config[@"isPlaying"]]];
+            }
+            if (@available(iOS 14.0, *) && config[@"playbackProgress"]) {
+                [item setPlaybackProgress:[RCTConvert CGFloat:config[@"playbackProgress"]]];
+            }
+            if (@available(iOS 14.0, *) && config[@"accessoryImage"]) {
+                [item setAccessoryImage:[RCTConvert UIImage:config[@"accessoryImage"]]];
+            }
+        } else {
+            NSLog(@"Failed to find template %@", template);
         }
-        CPListSection *section = listTemplate.sections[sectionIndex];
-        NSInteger index = [RCTConvert NSInteger:config[@"itemIndex"]];
-        if (index >= section.items.count) {
-            NSLog(@"Failed to update item at index %d, section size is %d", index, section.items.count);
-            return;
-        }
-        CPListItem *item = (CPListItem *)section.items[index];
-        if (config[@"imgUrl"]) {
-            NSString *imgUrlString = [RCTConvert NSString:config[@"imgUrl"]];
-            [self updateItemImageWithURL:item imgUrl:imgUrlString];
-        }
-        if (config[@"image"]) {
-            [item setImage:[RCTConvert UIImage:config[@"image"]]];
-        }
-        if (config[@"text"]) {
-            [item setText:[RCTConvert NSString:config[@"text"]]];
-        }
-        if (config[@"detailText"]) {
-            [item setDetailText:[RCTConvert NSString:config[@"detailText"]]];
-        }
-        if (config[@"isPlaying"]) {
-            [item setPlaying:[RCTConvert BOOL:config[@"isPlaying"]]];
-        }
-        if (@available(iOS 14.0, *) && config[@"playbackProgress"]) {
-            [item setPlaybackProgress:[RCTConvert CGFloat:config[@"playbackProgress"]]];
-        }
-        if (@available(iOS 14.0, *) && config[@"accessoryImage"]) {
-            [item setAccessoryImage:[RCTConvert UIImage:config[@"accessoryImage"]]];
-        }
-    } else {
-        NSLog(@"Failed to find template %@", template);
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateListTemplateItem: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(updateInformationTemplateItems:(NSString *)templateId items:(NSArray*)items) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    if (template) {
-        CPInformationTemplate *informationTemplate = (CPInformationTemplate*) template;
-        informationTemplate.items = [self parseInformationItems:items];
-    } else {
-        NSLog(@"Failed to find template %@", template);
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        if (template) {
+            CPInformationTemplate *informationTemplate = (CPInformationTemplate*) template;
+            informationTemplate.items = [self parseInformationItems:items];
+        } else {
+            NSLog(@"Failed to find template %@", template);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateInformationTemplateItems: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(updateInformationTemplateActions:(NSString *)templateId items:(NSArray*)actions) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    CPTemplate *template = [store findTemplateById:templateId];
-    if (template) {
-        CPInformationTemplate *informationTemplate = (CPInformationTemplate*) template;
-        informationTemplate.actions = [self parseInformationActions:actions templateId:templateId];
-    } else {
-        NSLog(@"Failed to find template %@", template);
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        CPTemplate *template = [store findTemplateById:templateId];
+        if (template) {
+            CPInformationTemplate *informationTemplate = (CPInformationTemplate*) template;
+            informationTemplate.actions = [self parseInformationActions:actions templateId:templateId];
+        } else {
+            NSLog(@"Failed to find template %@", template);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateInformationTemplateActions: %@", e);
     }
 }
 
@@ -921,114 +1125,150 @@ RCT_EXPORT_METHOD(getMaximumListImageRowItemImageSize:(NSString *)templateId
 }
 
 RCT_EXPORT_METHOD(updateMapTemplateConfig:(NSString *)templateId config:(NSDictionary*)config) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        [self applyConfigForMapTemplate:mapTemplate templateId:templateId config:config];
-    } else {
-        NSLog(@"Failed to find template %@", template);
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            [self applyConfigForMapTemplate:mapTemplate templateId:templateId config:config];
+        } else {
+            NSLog(@"Failed to find template %@", template);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateMapTemplateConfig: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(showPanningInterface:(NSString *)templateId animated:(BOOL)animated) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        [mapTemplate showPanningInterfaceAnimated:animated];
-    } else {
-        NSLog(@"Failed to find template %@", template);
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            [mapTemplate showPanningInterfaceAnimated:animated];
+        } else {
+            NSLog(@"Failed to find template %@", template);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in showPanningInterface: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(dismissPanningInterface:(NSString *)templateId animated:(BOOL)animated) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        [mapTemplate dismissPanningInterfaceAnimated:animated];
-    } else {
-        NSLog(@"Failed to find template %@", template);
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            [mapTemplate dismissPanningInterfaceAnimated:animated];
+        } else {
+            NSLog(@"Failed to find template %@", template);
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in dismissPanningInterface: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(enableNowPlaying:(BOOL)enable) {
-    if (enable && !isNowPlayingActive) {
-        [CPNowPlayingTemplate.sharedTemplate addObserver:self];
-    } else if (!enable && isNowPlayingActive) {
-        [CPNowPlayingTemplate.sharedTemplate removeObserver:self];
+    @try {
+        if (enable && !isNowPlayingActive) {
+            [CPNowPlayingTemplate.sharedTemplate addObserver:self];
+        } else if (!enable && isNowPlayingActive) {
+            [CPNowPlayingTemplate.sharedTemplate removeObserver:self];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in enableNowPlaying: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(hideTripPreviews:(NSString*)templateId) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        [mapTemplate hideTripPreviews];
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            [mapTemplate hideTripPreviews];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in hideTripPreviews: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(showTripPreviews:(NSString*)templateId tripIds:(NSArray*)tripIds tripConfiguration:(NSDictionary*)tripConfiguration) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    NSMutableArray *trips = [[NSMutableArray alloc] init];
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        NSMutableArray *trips = [[NSMutableArray alloc] init];
 
-    for (NSString *tripId in tripIds) {
-        CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
-        if (trip) {
-            [trips addObject:trip];
+        for (NSString *tripId in tripIds) {
+            CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
+            if (trip) {
+                [trips addObject:trip];
+            }
         }
-    }
 
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        [mapTemplate showTripPreviews:trips textConfiguration:[self parseTripPreviewTextConfiguration:tripConfiguration]];
-        lastShowTripsTime = [NSDate date];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            [mapTemplate showTripPreviews:trips textConfiguration:[self parseTripPreviewTextConfiguration:tripConfiguration]];
+            lastShowTripsTime = [NSDate date];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in showTripPreviews: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(showTripPreview:(NSString*)templateId tripIds:(NSArray*)tripIds selectedTripId:(NSString*)selectedTripId tripConfiguration:(NSDictionary*)tripConfiguration) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    NSMutableArray *trips = [[NSMutableArray alloc] init];
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        NSMutableArray *trips = [[NSMutableArray alloc] init];
 
-    for (NSString *tripId in tripIds) {
-        CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
-        if (trip) {
-            [trips addObject:trip];
+        for (NSString *tripId in tripIds) {
+            CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
+            if (trip) {
+                [trips addObject:trip];
+            }
         }
-    }
     
-    CPTrip *selectedTrip = [[RNCPStore sharedManager] findTripById:selectedTripId];
+        CPTrip *selectedTrip = [[RNCPStore sharedManager] findTripById:selectedTripId];
 
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        [mapTemplate showTripPreviews:trips selectedTrip:selectedTrip textConfiguration:[self parseTripPreviewTextConfiguration:tripConfiguration]];
-        lastShowTripsTime = [NSDate date];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            [mapTemplate showTripPreviews:trips selectedTrip:selectedTrip textConfiguration:[self parseTripPreviewTextConfiguration:tripConfiguration]];
+            lastShowTripsTime = [NSDate date];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in showTripPreview: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(showRouteChoicesPreviewForTrip:(NSString*)templateId tripId:(NSString*)tripId tripConfiguration:(NSDictionary*)tripConfiguration) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        CPTrip *trip = [[RNCPStore sharedManager] findTripById:tripId];
 
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        [mapTemplate showRouteChoicesPreviewForTrip:trip textConfiguration:[self parseTripPreviewTextConfiguration:tripConfiguration]];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            [mapTemplate showRouteChoicesPreviewForTrip:trip textConfiguration:[self parseTripPreviewTextConfiguration:tripConfiguration]];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in showRouteChoicesPreviewForTrip: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(presentNavigationAlert:(NSString*)templateId json:(NSDictionary*)json animated:(BOOL)animated) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        NSNumber *navigationAlertId = [json objectForKey:@"navigationAlertId"];
-        CPNavigationAlert *navigationAlert = navigationAlertWrappers[navigationAlertId];
-        if (navigationAlert) {
-            NSArray<NSString *> * titleVariants = [RCTConvert NSStringArray:json[@"titleVariants"]];
-            NSArray<NSString *> * subtitleVariants = [RCTConvert NSStringArray:json[@"subtitleVariants"]];
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            NSNumber *navigationAlertId = [json objectForKey:@"navigationAlertId"];
+            CPNavigationAlert *navigationAlert = navigationAlertWrappers[navigationAlertId];
+            if (navigationAlert) {
+                NSArray<NSString *> * titleVariants = [RCTConvert NSStringArray:json[@"titleVariants"]];
+                NSArray<NSString *> * subtitleVariants = [RCTConvert NSStringArray:json[@"subtitleVariants"]];
+
+                [navigationAlert updateTitleVariants:titleVariants subtitleVariants:subtitleVariants];
+                return;
+            }
             
-            [navigationAlert updateTitleVariants:titleVariants subtitleVariants:subtitleVariants];
-            return;
+            [mapTemplate presentNavigationAlert:[self parseNavigationAlert:json templateId:templateId] animated:animated];
         }
-        
-        [mapTemplate presentNavigationAlert:[self parseNavigationAlert:json templateId:templateId] animated:animated];
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in presentNavigationAlert: %@", e);
     }
 }
 
@@ -1049,42 +1289,58 @@ RCT_EXPORT_METHOD(dismissNavigationAlert:(NSString*)templateId animated:(BOOL)an
 }
 
 RCT_EXPORT_METHOD(activateVoiceControlState:(NSString*)templateId identifier:(NSString*)identifier) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    if (template) {
-        CPVoiceControlTemplate *voiceTemplate = (CPVoiceControlTemplate*) template;
-        [voiceTemplate activateVoiceControlStateWithIdentifier:identifier];
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        if (template) {
+            CPVoiceControlTemplate *voiceTemplate = (CPVoiceControlTemplate*) template;
+            [voiceTemplate activateVoiceControlStateWithIdentifier:identifier];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in activateVoiceControlState: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(reactToUpdatedSearchText:(NSString *)templateId templateId:(NSArray *)items) {
-    NSArray *sectionsItems = [self parseListItems:items startIndex:0 templateId:templateId];
+    @try {
+        NSArray *sectionsItems = [self parseListItems:items startIndex:0 templateId:templateId];
 
-    if (self.searchResultBlock) {
-        self.searchResultBlock(sectionsItems);
-        self.searchResultBlock = nil;
+        if (self.searchResultBlock) {
+            self.searchResultBlock(sectionsItems);
+            self.searchResultBlock = nil;
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in reactToUpdatedSearchText: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(reactToSelectedResult:(BOOL)status) {
-    if (self.selectedResultBlock) {
-        self.selectedResultBlock();
-        self.selectedResultBlock = nil;
+    @try {
+        if (self.selectedResultBlock) {
+            self.selectedResultBlock();
+            self.selectedResultBlock = nil;
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in reactToSelectedResult: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(updateMapTemplateMapButtons:(NSString*) templateId mapButtons:(NSArray*) mapButtonConfig) {
-    CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
-    if (template) {
-        CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
-        NSArray *mapButtons = [RCTConvert NSArray:mapButtonConfig];
-        NSMutableArray *result = [NSMutableArray array];
-        for (NSDictionary *mapButton in mapButtons) {
-            NSString *_id = [mapButton objectForKey:@"id"];
-            [result addObject:[RCTConvert CPMapButton:mapButton withHandler:^(CPMapButton * _Nonnull mapButton) {
-                [self sendTemplateEventWithName:mapTemplate name:@"mapButtonPressed" json:@{ @"id": _id }];
-            }]];
+    @try {
+        CPTemplate *template = [[RNCPStore sharedManager] findTemplateById:templateId];
+        if (template) {
+            CPMapTemplate *mapTemplate = (CPMapTemplate*) template;
+            NSArray *mapButtons = [RCTConvert NSArray:mapButtonConfig];
+            NSMutableArray *result = [NSMutableArray array];
+            for (NSDictionary *mapButton in mapButtons) {
+                NSString *_id = [mapButton objectForKey:@"id"];
+                [result addObject:[RCTConvert CPMapButton:mapButton withHandler:^(CPMapButton * _Nonnull mapButton) {
+                    [self sendTemplateEventWithName:mapTemplate name:@"mapButtonPressed" json:@{ @"id": _id }];
+                }]];
+            }
+            [mapTemplate setMapButtons:result];
         }
-        [mapTemplate setMapButtons:result];
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateMapTemplateMapButtons: %@", e);
     }
 }
 
@@ -1163,7 +1419,75 @@ RCT_EXPORT_METHOD(getRootTemplate: (RCTPromiseResolveBlock)resolve
         if (store.app == nil) {
             store.app = [[RNCarPlayApp alloc] init];
         }
-        [store.app connectModuleWithBridge:self.bridge moduleName:templateId];
+        // Try to get the RCTRootViewFactory from AppDelegate for New Architecture support
+        NSObject *appDelegate = (NSObject *)RCTSharedApplication().delegate;
+        RCTRootViewFactory *factory = nil;
+        RCTBridge *factoryBridge = nil;
+        if ([appDelegate respondsToSelector:NSSelectorFromString(@"reactNativeFactory")]) {
+            id reactNativeFactory = [appDelegate valueForKey:@"reactNativeFactory"];
+            if (reactNativeFactory != nil && [reactNativeFactory respondsToSelector:NSSelectorFromString(@"rootViewFactory")]) {
+                factory = [reactNativeFactory valueForKey:@"rootViewFactory"];
+                if (factory != nil && factory.bridge != nil) {
+                    factoryBridge = factory.bridge;
+                }
+            }
+        }
+
+        // Check if we can get reactHost for bridgeless mode (New Architecture)
+        id reactHost = nil;
+        if (factory != nil && [factory respondsToSelector:NSSelectorFromString(@"reactHost")]) {
+            reactHost = [factory valueForKey:@"reactHost"];
+        }
+
+        RCTBridge *bridgeToUse = factoryBridge ?: (self.bridge.valid ? self.bridge : nil);
+
+        if (reactHost != nil) {
+            // Bridgeless mode - get surfacePresenter using NSInvocation to avoid KVC issues
+            id surfacePresenter = nil;
+            SEL surfacePresenterSel = NSSelectorFromString(@"surfacePresenter");
+            if ([reactHost respondsToSelector:surfacePresenterSel]) {
+                NSMethodSignature *sig = [reactHost methodSignatureForSelector:surfacePresenterSel];
+                if (sig != nil) {
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    [inv setTarget:reactHost];
+                    [inv setSelector:surfacePresenterSel];
+                    @try {
+                        [inv invoke];
+                        void *result = nil;
+                        [inv getReturnValue:&result];
+                        surfacePresenter = (__bridge id)result;
+                    } @catch (NSException *e) {
+                        NSLog(@"[RNCarPlay] Exception getting surfacePresenter: %@", e);
+                    }
+                }
+            }
+
+            if (surfacePresenter != nil) {
+                // Store surfacePresenter for deferred surface creation
+                objc_setAssociatedObject(store.app, "surfacePresenter", surfacePresenter, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                objc_setAssociatedObject(store.app, "pendingModuleName", templateId, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+                BOOL isConnected = ((RNCarPlayApp *)store.app).isConnected;
+                if (isConnected) {
+                    // Defer surface creation to next run loop to avoid TurboModule crash
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        @try {
+                            RNCPStore *asyncStore = [RNCPStore sharedManager];
+                            UIWindow *carPlayWindow = [((RNCarPlayApp *)asyncStore.app) getWindow];
+                            if (carPlayWindow != nil) {
+                                [RNCarPlay createPendingFabricSurfaceWithWindow:(CPWindow *)carPlayWindow];
+                            }
+                        } @catch (NSException *e) {
+                            NSLog(@"[RNCarPlay] Exception in dispatch_async: %@", e);
+                        }
+                    });
+                } else {
+                    ((RNCarPlayApp *)store.app).hasPendingFabricSurface = YES;
+                }
+            }
+        } else if (bridgeToUse != nil) {
+            [store.app connectModuleWithBridge:bridgeToUse moduleName:templateId];
+        }
     }
 }
 
@@ -1632,14 +1956,16 @@ RCT_EXPORT_METHOD(getRootTemplate: (RCTPromiseResolveBlock)resolve
     if ([json objectForKey:@"lightImage"] && [json objectForKey:@"darkImage"]) {
         imageSet = [[CPImageSet alloc] initWithLightContentImage:[RCTConvert UIImage:json[@"lightImage"]] darkContentImage:[RCTConvert UIImage:json[@"darkImage"]]];
     }
-    NSNumber *navigationAlertId = [json objectForKey:@"navigationAlertId"];
+    NSNumber *navigationAlertId = [json objectForKey:@"navigationAlertId"] ?: @0;
     
     CPAlertAction *secondaryAction = [json objectForKey:@"secondaryAction"] ? [self parseAlertAction:json[@"secondaryAction"] body:@{ @"templateId": templateId, @"secondary": @(YES), @"navigationAlertId": navigationAlertId }] : nil;
 
     CPNavigationAlert* alert = [[CPNavigationAlert alloc] initWithTitleVariants:[RCTConvert NSStringArray:json[@"titleVariants"]] subtitleVariants:[RCTConvert NSStringArray:json[@"subtitleVariants"]] imageSet:imageSet primaryAction:[self parseAlertAction:json[@"primaryAction"] body:@{ @"templateId": templateId, @"primary": @(YES), @"navigationAlertId": navigationAlertId }] secondaryAction:secondaryAction duration:[RCTConvert double:json[@"duration"]]];
     
     
-    navigationAlertWrappers[navigationAlertId] = alert;
+    if (navigationAlertId) {
+        navigationAlertWrappers[navigationAlertId] = alert;
+    }
 
     return alert;
 }
@@ -1924,23 +2250,35 @@ RCT_EXPORT_METHOD(getRootTemplate: (RCTPromiseResolveBlock)resolve
 }
 
 RCT_EXPORT_METHOD(createDashboard:(NSString *)dashboardId config:(NSDictionary*)config) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    if (store.dashboard == nil) {
-        store.dashboard = [[RNCarPlayDashboard alloc] init];
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        if (store.dashboard == nil) {
+            store.dashboard = [[RNCarPlayDashboard alloc] init];
+        }
+        [store.dashboard connectModuleWithBridge:self.bridge moduleName:dashboardId buttonConfig:config];
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in createDashboard: %@", e);
     }
-    [store.dashboard connectModuleWithBridge:self.bridge moduleName:dashboardId buttonConfig:config];
 }
 
 RCT_EXPORT_METHOD(checkForDashboardConnection) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    if (((RNCarPlayDashboard *)store.dashboard).isConnected && hasListeners) {
-        [self sendEventWithName:@"dashboardDidConnect" body:[store.dashboard getConnectedWindowInformation]];
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        if (((RNCarPlayDashboard *)store.dashboard).isConnected && hasListeners) {
+            [self sendEventWithName:@"dashboardDidConnect" body:[store.dashboard getConnectedWindowInformation]];
+        }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in checkForDashboardConnection: %@", e);
     }
 }
 
 RCT_EXPORT_METHOD(updateDashboardShortcutButtons:(NSDictionary*)config) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    [store.dashboard updateDashboardButtonsWithConfig:config];
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        [store.dashboard updateDashboardButtonsWithConfig:config];
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in updateDashboardShortcutButtons: %@", e);
+    }
 }
 
 # pragma Cluster
@@ -1975,17 +2313,25 @@ RCT_EXPORT_METHOD(updateDashboardShortcutButtons:(NSDictionary*)config) {
 }
 
 RCT_EXPORT_METHOD(initCluster:(NSString *)clusterId config:(NSDictionary *)config) {
-    RNCPStore *store = [RNCPStore sharedManager];
-    [store.cluster[clusterId] connectWithBridge:self.bridge config:config];
+    @try {
+        RNCPStore *store = [RNCPStore sharedManager];
+        [store.cluster[clusterId] connectWithBridge:self.bridge config:config];
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in initCluster: %@", e);
+    }
 }
 
 RCT_EXPORT_METHOD(checkForClusterConnection:(NSString *)clusterId) {
-    if (@available(iOS 15.4, *)) {
-        RNCPStore *store = [RNCPStore sharedManager];
-        RNCarPlayCluster *cluster = [store.cluster objectForKey:clusterId];
-        if (cluster != nil && cluster.isConnected && hasListeners) {
-            [self sendEventWithName:@"clusterWindowDidConnect" body:[cluster getConnectedWindowInformation]];
+    @try {
+        if (@available(iOS 15.4, *)) {
+            RNCPStore *store = [RNCPStore sharedManager];
+            RNCarPlayCluster *cluster = [store.cluster objectForKey:clusterId];
+            if (cluster != nil && cluster.isConnected && hasListeners) {
+                [self sendEventWithName:@"clusterWindowDidConnect" body:[cluster getConnectedWindowInformation]];
+            }
         }
+    } @catch (NSException *e) {
+        NSLog(@"[RNCarPlay] Exception in checkForClusterConnection: %@", e);
     }
 }
 

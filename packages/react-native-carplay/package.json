@@ -1,28 +1,34 @@
 {
-  "name": "@g4rb4g3/react-native-carplay",
-  "version": "2.7.21",
-  "description": "CarPlay for React Native",
+  "name": "@elton-mobility/react-native-carplay",
+  "version": "1.0.0",
+  "description": "CarPlay for React Native with Expo plugin support",
   "main": "lib/index.js",
   "react-native": "src/index.ts",
   "source": "src/index.ts",
+  "types": "./lib/index.d.ts",
   "files": [
     "src",
     "lib",
     "ios",
     "android",
-    "react-native-carplay.podspec"
+    "plugin",
+    "app.plugin.js",
+    "react-native-carplay.podspec",
+    "react-native.config.js"
   ],
   "podspecPath": "./react-native-carplay.podspec",
+  "app.plugin": "./app.plugin.js",
   "scripts": {
-    "prepack": "yarn run build",
+    "prepack": "yarn run build && yarn run build:plugin",
     "lint": "eslint . --ext .ts,.tsx,.js,.jsx",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
+    "build:plugin": "tsc -p plugin/tsconfig.json",
     "fix-all-files": "eslint . --ext .ts,.tsx,.js,.jsx --fix"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/g4rb4g3/react-native-carplay.git"
+    "url": "git+https://github.com/elton-mobility/react-native-carplay.git"
   },
   "keywords": [
     "react",
@@ -30,17 +36,23 @@
     "carplay",
     "navigation",
     "car",
-    "auto"
+    "auto",
+    "expo",
+    "expo-plugin"
   ],
   "author": "Birkir Gudjonsson <birkir.gudjonsson@gmail.com>",
+  "contributors": [
+    "g4rb4g3",
+    "Elton Mobility"
+  ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/g4rb4g3/react-native-carplay/issues"
+    "url": "https://github.com/elton-mobility/react-native-carplay/issues"
   },
-  "homepage": "https://github.com/g4rb4g3/react-native-carplay#readme",
+  "homepage": "https://github.com/elton-mobility/react-native-carplay#readme",
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0",
-    "react-native": "^0.74.0 || ^0.76.0 || ^0.79.0"
+    "react-native": "^0.74.0 || ^0.76.0 || ^0.79.0 || ^0.81.0"
   },
   "peerDependenciesMeta": {
     "react": {
@@ -51,6 +63,7 @@
     }
   },
   "devDependencies": {
+    "@expo/config-plugins": "^8.0.0",
     "@react-native-community/eslint-config": "3.2.0",
     "@tsconfig/react-native": "3.0.2",
     "@types/node": "^22.15.21",
@@ -70,6 +83,5 @@
   },
   "directories": {
     "lib": "lib"
-  },
-  "types": "./lib/index.d.ts"
+  }
 }

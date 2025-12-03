@@ -2,6 +2,7 @@
 #import <CarPlay/CarPlay.h>
 #import <React/RCTBridgeModule.h>
 #import <React/RCTEventEmitter.h>
+#import <React-RCTAppDelegate/RCTRootViewFactory.h>
 #import "RCTConvert+RNCarPlay.h"
 #import "RNCPStore.h"
 

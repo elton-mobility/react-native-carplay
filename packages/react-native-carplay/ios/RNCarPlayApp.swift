@@ -4,14 +4,20 @@ import React
 @objc(RNCarPlayApp)
 public class RNCarPlayApp: NSObject, CPInterfaceControllerDelegate {
     @objc public var interfaceController: CPInterfaceController?
-    var window: UIWindow?
+    @objc public var window: UIWindow?
+
+    /// Getter method for Objective-C to access the window without KVC
+    @objc public func getWindow() -> UIWindow? {
+        return window
+    }
 
     var bridge: RCTBridge?
     var moduleName: String = "carplay-app"
 
-    var rootView: RCTRootView?
+    var rootView: UIView?
 
     @objc public var isConnected = false
+    @objc public var hasPendingFabricSurface = false
 
     @objc public func connectModule(
         bridge: RCTBridge, moduleName: String
@@ -20,6 +26,36 @@ public class RNCarPlayApp: NSObject, CPInterfaceControllerDelegate {
         self.moduleName = moduleName
 
         connect()
+    }
+
+    /// Bridgeless mode - accepts a pre-created fabric surface view
+    @objc public func connectWithFabricView(
+        fabricView: UIView, moduleName: String
+    ) {
+        self.moduleName = moduleName
+
+        if self.window != nil {
+            setupFabricView(fabricView)
+        } else {
+            self.pendingFabricView = fabricView
+        }
+    }
+
+    var pendingFabricView: UIView?
+
+    private func setupFabricView(_ fabricView: UIView) {
+        guard let window = self.window else { return }
+        if self.rootView != nil { return }
+
+        self.rootView = fabricView
+        window.rootViewController = RNCarPlayViewController(
+            rootView: fabricView, moduleName: self.moduleName)
+
+        let isVisible = RNCPStore.sharedManager().getVisibility(
+            RNCarPlayConstants.SceneIdCarPlayApp)
+        RNCarPlayUtils.sendRNCarPlayEvent(
+            name: RNCarPlayConstants.EventStateDidChange,
+            body: ["isVisible": isVisible])
     }
 
     @objc public func connectScene(
@@ -44,6 +80,16 @@ public class RNCarPlayApp: NSObject, CPInterfaceControllerDelegate {
 
         self.interfaceController?.delegate = self
         self.isConnected = true
+
+        // Connect using pendingFabricView (bridgeless) or bridge (Old Arch)
+        if let fabricView = self.pendingFabricView {
+            self.pendingFabricView = nil
+            setupFabricView(fabricView)
+        } else if self.hasPendingFabricSurface {
+            // Fabric surface will be created after this method returns
+        } else {
+            connect()
+        }
 
         RNCarPlayUtils.sendRNCarPlayEvent(
             name: "didConnect", body: getConnectedWindowInformation())
@@ -91,13 +137,16 @@ public class RNCarPlayApp: NSObject, CPInterfaceControllerDelegate {
     }
 
     @objc public func disconnect() {
-        if let contentView = self.rootView?.contentView as? RCTRootContentView {
+        // Handle RCTRootView cleanup for old architecture
+        if let rctRootView = self.rootView as? RCTRootView,
+           let contentView = rctRootView.contentView as? RCTRootContentView {
             contentView.invalidate()
         }
 
         self.rootView?.removeFromSuperview()
 
         self.rootView = nil
+        self.pendingFabricView = nil
         self.interfaceController = nil
         self.window?.rootViewController = nil
         self.window = nil
