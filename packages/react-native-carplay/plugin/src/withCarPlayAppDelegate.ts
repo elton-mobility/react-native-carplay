@@ -20,9 +20,9 @@ export const withCarPlayAppDelegate: ConfigPlugin = (config) => {
     contents = updateClassDefinition(contents);
     contents = updateReactNativeDelegateType(contents);
     contents = addObjcToReactNativeFactory(contents);
-    contents = restructureApplicationMethod(contents);
     contents = removeExistingCarPlayMethods(contents);
     contents = addReactNativeInitFunction(contents);
+    contents = restructureApplicationMethod(contents);
     contents = addCarPlaySceneMethods(contents);
 
     config.modResults.contents = contents;
@@ -55,9 +55,8 @@ function updateClassDefinition(contents: string): string {
 
   if (contents.match(uiAppMainPattern)) {
     contents = contents.replace(uiAppMainPattern, "@main\nclass AppDelegate:");
-  } else {
-    console.warn("[CarPlay Plugin] Could not find @UIApplicationMain pattern to replace with @main");
   }
+  // If @UIApplicationMain is not found, it's expected for Expo 55+ which already uses @main
 
   // Add initialized state variable if missing
   if (!contents.includes("var initialized: Bool = false")) {
@@ -148,51 +147,72 @@ function removeExistingCarPlayMethods(contents: string): string {
 }
 
 /**
- * Adds the React Native initialization function that handles setup once
+ * Extracts the body of didFinishLaunchingWithOptions and wraps it in an initRN function.
+ * Must be called BEFORE restructureApplicationMethod, while the original body is intact.
  */
 function addReactNativeInitFunction(contents: string): string {
   if (contents.includes("func initRN(")) {
     return contents; // Already exists
   }
 
+  // Find the didFinishLaunchingWithOptions method signature
+  const methodSignaturePattern =
+    /public\s+override\s+func\s+application\s*\(\s*_\s+application:\s*UIApplication\s*,\s*didFinishLaunchingWithOptions\s+launchOptions:[^)]*\)\s*->\s*Bool\s*\{/;
+
+  const signatureMatch = contents.match(methodSignaturePattern);
+  if (!signatureMatch || signatureMatch.index === undefined) {
+    throw new Error(
+      "[CarPlay Plugin] Could not find application didFinishLaunchingWithOptions method to extract body for initRN"
+    );
+  }
+
+  // Find the method body by brace-matching from the opening {
+  const methodStartIndex = signatureMatch.index + signatureMatch[0].length;
+  let braceDepth = 1;
+  let methodEndIndex = methodStartIndex;
+
+  for (let i = methodStartIndex; i < contents.length; i++) {
+    if (contents[i] === "{") {
+      braceDepth++;
+    } else if (contents[i] === "}") {
+      braceDepth--;
+      if (braceDepth === 0) {
+        methodEndIndex = i;
+        break;
+      }
+    }
+  }
+
+  if (braceDepth !== 0) {
+    throw new Error(
+      "[CarPlay Plugin] Could not find matching closing brace for didFinishLaunchingWithOptions"
+    );
+  }
+
+  // Extract the body (between opening { and closing })
+  const methodBody = contents.substring(methodStartIndex, methodEndIndex);
+
+  // Remove the `return super.application(...)` line — it stays in the restructured method
+  const returnPattern =
+    /\n?\s*return\s+super\.application\s*\(\s*application\s*,\s*didFinishLaunchingWithOptions\s*:\s*launchOptions\s*\)\s*\n?/;
+  let initBody = methodBody.replace(returnPattern, "");
+
+  // Trim leading/trailing blank lines but preserve internal structure
+  initBody = initBody.replace(/^\n+/, "").replace(/\n+$/, "");
+
   const initRNFunction = `  func initRN(launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) {
     if (initialized) { return }
     initialized = true
-    let delegate = ReactNativeDelegate()
-    let factory = ExpoReactNativeFactory(delegate: delegate)
-    delegate.dependencyProvider = RCTAppDependencyProvider()
-
-    reactNativeDelegate = delegate
-    reactNativeFactory = factory
-    bindReactNativeFactory(factory)
-
-    #if os(iOS) || os(tvOS)
-      window = UIWindow(frame: UIScreen.main.bounds)
-      // @generated begin @react-native-firebase/app-didFinishLaunchingWithOptions - expo prebuild (DO NOT MODIFY) sync-10e8520570672fd76b2403b7e1e27f5198a6349a
-      FirebaseApp.configure()
-      // @generated end @react-native-firebase/app-didFinishLaunchingWithOptions
-      factory.startReactNative(
-        withModuleName: "main",
-        in: window,
-        launchOptions: launchOptions)
-    #endif
+${initBody}
   }`;
 
-  // Try to add after the application method
-  const applicationEndPattern = /application\([^{]*didFinishLaunchingWithOptions[^{]*\{[^}]*return[^}]*\}/;
-
-  if (contents.match(applicationEndPattern)) {
-    contents = contents.replace(applicationEndPattern, (match) => `${match}\n\n${initRNFunction}`);
-  } else {
-    // Fallback: add before Linking API section
-    const linkingApiPattern = /\/\/\s*Linking API/;
-
-    if (contents.match(linkingApiPattern)) {
-      contents = contents.replace(linkingApiPattern, `${initRNFunction}\n\n  // Linking API`);
-    } else {
-      throw new Error("[CarPlay Plugin] Could not find suitable location to add initRN function");
-    }
-  }
+  // Insert right after the closing } of didFinishLaunchingWithOptions
+  const insertPosition = methodEndIndex + 1;
+  contents =
+    contents.substring(0, insertPosition) +
+    "\n\n" +
+    initRNFunction +
+    contents.substring(insertPosition);
 
   return contents;
 }

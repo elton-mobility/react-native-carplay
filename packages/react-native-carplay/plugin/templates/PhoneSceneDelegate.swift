@@ -11,19 +11,12 @@ class PhoneSceneDelegate: UIResponder, UIWindowSceneDelegate {
     appDelegate.initRN(launchOptions: connectionOptions2LaunchOptions(connectionOptions: connectionOptions))
 
     guard let windowScene = scene as? UIWindowScene else { return }
-    guard let appRootView = appDelegate.window?.rootViewController?.view else { return }
 
-    let rootViewController = UIViewController()
-
-    // Fix: Check if rootView is already associated with a view controller
-    if appRootView.superview != nil {
-      appRootView.removeFromSuperview()
-    }
-
-    rootViewController.view.addSubview(appRootView)
-
+    // Reuse the factory's root view controller to preserve the full VC containment
+    // hierarchy (ScreenOrientationVC > DevLauncherVC etc). Creating a new UIViewController
+    // and moving just the view breaks child-parent VC relationships.
     let window = UIWindow(windowScene: windowScene)
-    window.rootViewController = rootViewController
+    window.rootViewController = appDelegate.window?.rootViewController
     self.window = window
     window.makeKeyAndVisible()
   }
