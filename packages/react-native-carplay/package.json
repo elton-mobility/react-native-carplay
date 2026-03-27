@@ -1,6 +1,6 @@
 {
   "name": "@elton-mobility/react-native-carplay",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "CarPlay for React Native with Expo plugin support",
   "main": "lib/index.js",
   "react-native": "src/index.ts",
