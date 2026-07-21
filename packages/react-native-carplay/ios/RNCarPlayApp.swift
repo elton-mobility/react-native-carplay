@@ -137,12 +137,9 @@ public class RNCarPlayApp: NSObject, CPInterfaceControllerDelegate {
     }
 
     @objc public func disconnect() {
-        // Handle RCTRootView cleanup for old architecture
-        if let rctRootView = self.rootView as? RCTRootView,
-           let contentView = rctRootView.contentView as? RCTRootContentView {
-            contentView.invalidate()
-        }
-
+        // RN 0.85 removed RCTRootContentView (old-arch only). On the New Architecture
+        // rootView is a fabric view and this cast was always nil; removeFromSuperview +
+        // niling below is the actual teardown.
         self.rootView?.removeFromSuperview()
 
         self.rootView = nil

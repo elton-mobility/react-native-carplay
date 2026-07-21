@@ -88,10 +88,7 @@ public class RNCarPlayDashboard: NSObject {
     }
 
     @objc func disconnect() {
-        if let contentView = self.rootView?.contentView as? RCTRootContentView {
-            contentView.invalidate()
-        }
-
+        // RN 0.85 removed RCTRootContentView (old-arch only); removeFromSuperview handles teardown.
         self.rootView?.removeFromSuperview()
         self.rootView = nil
         self.dashboardController = nil
