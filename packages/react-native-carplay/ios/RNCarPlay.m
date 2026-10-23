@@ -1427,9 +1427,11 @@ RCT_EXPORT_METHOD(getRootTemplate: (RCTPromiseResolveBlock)resolve
             id reactNativeFactory = [appDelegate valueForKey:@"reactNativeFactory"];
             if (reactNativeFactory != nil && [reactNativeFactory respondsToSelector:NSSelectorFromString(@"rootViewFactory")]) {
                 factory = [reactNativeFactory valueForKey:@"rootViewFactory"];
+#if !RCT_REMOVE_LEGACY_ARCH
                 if (factory != nil && factory.bridge != nil) {
                     factoryBridge = factory.bridge;
                 }
+#endif
             }
         }
 

@@ -1,0 +1,30 @@
+name: ci/expo-plugin
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'packages/react-native-carplay/plugin/**'
+      - 'packages/react-native-carplay/package.json'
+      - 'yarn.lock'
+      - '.github/workflows/ci-expo-plugin.yml'
+  pull_request:
+    paths:
+      - 'packages/react-native-carplay/plugin/**'
+      - 'packages/react-native-carplay/package.json'
+      - 'yarn.lock'
+      - '.github/workflows/ci-expo-plugin.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node .yarn/releases/yarn-berry.cjs install --immutable
+      - run: node .yarn/releases/yarn-berry.cjs workspace @elton-mobility/react-native-carplay test:plugin

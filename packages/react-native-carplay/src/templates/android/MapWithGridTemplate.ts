@@ -5,7 +5,7 @@ import {
   AndroidNavigationBaseTemplateConfig,
 } from './AndroidNavigationBaseTemplate';
 import { GridTemplateConfig } from '../GridTemplate';
-import { AndroidGridButton } from 'src/interfaces/GridButton';
+import { AndroidGridButton } from '../../interfaces/GridButton';
 
 export type MapWithGridTemplateConfig = AndroidNavigationBaseTemplateConfig &
   Omit<GridTemplateConfig, 'actions' | 'onButtonPressed' | 'buttons'> & {

@@ -2,7 +2,7 @@ import { Image, Platform } from 'react-native';
 import { CarPlay } from '../CarPlay';
 import { ListItem } from '../interfaces/ListItem';
 import { SearchButtonPressedEvent, Template, TemplateConfig  } from './Template';
-import { Action } from 'src/interfaces/Action';
+import { Action } from '../interfaces/Action';
 
 export interface SearchTemplateConfig extends TemplateConfig {
   /**
