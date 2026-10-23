@@ -6,7 +6,7 @@ CarPlay and Android Auto support for React Native applications.
 
 - 📱 **CarPlay Support**: Full iOS CarPlay integration
 - 🚗 **Android Auto Support**: Complete Android Auto compatibility  
-- 🎯 **Expo SDK 53 Compatible**: Updated for the latest Expo SDK
+- 🎯 **Expo Config Plugin**: SDK 58 scene startup, with the legacy AppDelegate startup path retained
 - 🏗️ **New Architecture Ready**: Supports React Native's New Architecture
 - 📍 **Navigation Templates**: Map, List, Grid, and more
 - 🎵 **Media Support**: Now Playing templates and audio controls
@@ -15,20 +15,35 @@ CarPlay and Android Auto support for React Native applications.
 ## Installation
 
 ```bash
-npm install @g4rb4g3/react-native-carplay
+npm install @elton-mobility/react-native-carplay
 # or
-yarn add @g4rb4g3/react-native-carplay
+yarn add @elton-mobility/react-native-carplay
 ```
 
-## Expo SDK 53 Compatibility
+## Expo scene startup
 
-This version has been updated for full compatibility with Expo SDK 53, including:
+The config plugin selects scene templates from the generated AppDelegate, not the device's iOS version:
 
-- ✅ **Android API 34**: Updated to target stable Android version
-- ✅ **Kotlin 1.9.10**: Stable Kotlin version with proven compatibility
-- ✅ **Gradle 8.4**: Updated build tools for better compatibility
-- ✅ **React Native 0.76+**: Support for React Native versions compatible with Expo SDK 53
-- ✅ **New Architecture**: Full support for Fabric and TurboModules
+- **SDK 58:** `ExpoReactNativeFactoryProvider` identifies Expo's scene-owned startup. AppDelegate
+  prepares the factory once; `PhoneSceneDelegate` inherits Expo's lifecycle and link forwarding.
+- **Phone first:** Expo creates the phone window and starts React Native.
+- **CarPlay or background first:** `startReactNativeWithoutScene()` starts React Native in a retained
+  holder window. Connecting the phone later moves the existing root controller into its scene window.
+- **Phone reconnection:** reuse the root controller instead of mounting another `main` tree.
+- **Legacy Expo templates:** retain AppDelegate-owned window creation and `initRN()` startup. The
+  SDK 58 scene delegate is not compiled into these apps.
+
+The shared `main` tree is distinct from any map surfaces created for CarPlay templates. Firebase
+initialization remains the consuming app's responsibility and must run before React Native starts.
+
+Plugin regression tests use SDK 57 and SDK 58 AppDelegate fixtures:
+
+```bash
+yarn workspace @elton-mobility/react-native-carplay test:plugin
+```
+
+These tests cover prebuild generation and repeated application of the plugin, not a live CarPlay
+connection. Test phone-first, CarPlay-first, background launch and phone reconnection on the target app.
 
 ## Requirements
 
@@ -46,16 +61,18 @@ This version has been updated for full compatibility with Expo SDK 53, including
 
 ### iOS Setup
 
-1. Add CarPlay capability to your app:
-   ```xml
-   <!-- ios/YourApp/Info.plist -->
-   <key>UIRequiredDeviceCapabilities</key>
-   <array>
-     <string>carplay</string>
-   </array>
-   ```
+For Expo, register the plugin and regenerate the native project:
 
-2. Configure CarPlay scenes in your app delegate.
+```json
+{"expo": {"plugins": ["@elton-mobility/react-native-carplay"]}}
+```
+
+```bash
+npx expo prebuild --platform ios
+```
+
+The plugin installs the phone and CarPlay scene delegates, scene registrations and CarPlay
+entitlements. For a bare React Native app, see [CarPlay setup](../../CarPlay.md#installing).
 
 ### Android Setup
 

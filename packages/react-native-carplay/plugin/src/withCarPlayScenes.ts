@@ -1,22 +1,7 @@
 import { ConfigPlugin, withXcodeProject, withDangerousMod, IOSConfig } from "@expo/config-plugins";
 import * as path from "path";
 import * as fs from "fs";
-
-async function copyFile(templatesDir: string, destDir: string, fileName: string): Promise<void> {
-  const sourcePath = path.join(templatesDir, fileName);
-  const destPath = path.join(destDir, fileName);
-
-  try {
-    await fs.promises.access(sourcePath);
-    try {
-      await fs.promises.copyFile(sourcePath, destPath);
-    } catch (e) {
-      console.error(`[withCarPlay] Failed to copy ${fileName}:`, e);
-    }
-  } catch (e) {
-    console.error(`[withCarPlay] Source ${fileName} doesn't exist at ${sourcePath}`);
-  }
-}
+import { usesExpoSceneStartup } from "./withCarPlayAppDelegate";
 
 export const withCarPlayScenesFiles: ConfigPlugin = (config) => {
   return withDangerousMod(config, [
@@ -24,10 +9,16 @@ export const withCarPlayScenesFiles: ConfigPlugin = (config) => {
     async (config) => {
       const projectPath = IOSConfig.Paths.getAppDelegateFilePath(config.modRequest.projectRoot);
       const targetDir = path.dirname(projectPath);
+      const appDelegate = await fs.promises.readFile(projectPath, "utf8");
       const templatesDir = path.join(__dirname, "..", "templates");
+      const suffix = usesExpoSceneStartup(appDelegate) ? ".expo58" : "";
 
-      await copyFile(templatesDir, targetDir, "CarSceneDelegate.swift");
-      await copyFile(templatesDir, targetDir, "PhoneSceneDelegate.swift");
+      await Promise.all(["CarSceneDelegate", "PhoneSceneDelegate"].map(scene =>
+        fs.promises.copyFile(
+          path.join(templatesDir, `${scene}${suffix}.swift`),
+          path.join(targetDir, `${scene}.swift`)
+        )
+      ));
 
       return config;
     },

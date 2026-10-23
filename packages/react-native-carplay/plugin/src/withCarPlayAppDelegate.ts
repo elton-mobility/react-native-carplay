@@ -13,6 +13,9 @@ import { ConfigPlugin, withAppDelegate } from "@expo/config-plugins";
  */
 export const withCarPlayAppDelegate: ConfigPlugin = (config) => {
   return withAppDelegate(config, (config) => {
+    if (config.modResults.language !== "swift") {
+      throw new Error("[CarPlay Plugin] A Swift AppDelegate is required");
+    }
     let contents = config.modResults.contents;
 
     // Apply all transformations in logical order
@@ -29,6 +32,11 @@ export const withCarPlayAppDelegate: ConfigPlugin = (config) => {
     return config;
   });
 };
+
+// SDK 58's factory provider delegates window creation and RN startup to ExpoAppSceneDelegate.
+export function usesExpoSceneStartup(contents: string): boolean {
+  return /class\s+AppDelegate\s*:[^{]*\bExpoReactNativeFactoryProvider\b/.test(contents);
+}
 
 /**
  * Adds required imports to the top of the file if they don't already exist
@@ -81,7 +89,7 @@ function updateReactNativeDelegateType(contents: string): string {
 
   if (contents.includes("var reactNativeDelegate: ExpoReactNativeFactoryDelegate?")) {
     contents = contents.replace(oldDelegatePattern, "var reactNativeDelegate: ReactNativeDelegate?");
-  } else {
+  } else if (!contents.includes("var reactNativeDelegate: ReactNativeDelegate?")) {
     console.warn("[CarPlay Plugin] Could not find ExpoReactNativeFactoryDelegate to update type");
   }
 
@@ -116,9 +124,15 @@ function restructureApplicationMethod(contents: string): string {
     /public\s+override\s+func\s+application\s*\([^{]*\)\s*->\s*Bool\s*\{[\s\S]*?return[^}]*\}/;
 
   if (contents.match(appDelegatePattern)) {
+    const backgroundStartup = usesExpoSceneStartup(contents)
+      ? `
+    if application.applicationState == .background {
+      startReactNativeWithoutScene(launchOptions: launchOptions)
+    }`
+      : "";
     const newApplicationMethod = `public override func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
 
-    initRN(launchOptions: launchOptions)
+    initRN(launchOptions: launchOptions)${backgroundStartup}
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }`;
@@ -221,7 +235,16 @@ ${initBody}
  * Adds CarPlay scene configuration methods for handling CarPlay and Phone scenes
  */
 function addCarPlaySceneMethods(contents: string): string {
-  const carPlayMethods = `  func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+  // Releases before the generated markers left these methods unmarked.
+  if (contents.includes("configurationForConnecting connectingSceneSession:")) {
+    if (contents.includes("scene.delegateClass = CarSceneDelegate.self") &&
+        contents.includes("scene.delegateClass = PhoneSceneDelegate.self")) {
+      return contents;
+    }
+    throw new Error("[CarPlay Plugin] AppDelegate already defines custom scene configuration");
+  }
+  const carPlayMethods = `  // @generated begin carplay-applicationConfigForConnecting
+  func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
     if (connectingSceneSession.role == UISceneSession.Role.carTemplateApplication) {
       let scene =  UISceneConfiguration(name: "CarPlay", sessionRole: connectingSceneSession.role)
       scene.delegateClass = CarSceneDelegate.self
@@ -234,7 +257,8 @@ function addCarPlaySceneMethods(contents: string): string {
   }
 
   func application(_ application: UIApplication, didDiscardSceneSessions sceneSessions: Set<UISceneSession>) {
-  }`;
+  }
+  // @generated end carplay-applicationConfigForConnecting`;
 
   // Try to add after Universal Links section
   const universalLinksPattern =

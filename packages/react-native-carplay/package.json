@@ -9,9 +9,12 @@
   "files": [
     "src",
     "lib",
+    "!lib/*.tsbuildinfo",
     "ios",
     "android",
     "plugin",
+    "!plugin/__test__",
+    "!plugin/jest.config.js",
     "app.plugin.js",
     "react-native-carplay.podspec",
     "react-native.config.js"
@@ -24,6 +27,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "build:plugin": "tsc -p plugin/tsconfig.json",
+    "test:plugin": "yarn build:plugin && jest --config plugin/jest.config.js --runInBand",
     "fix-all-files": "eslint . --ext .ts,.tsx,.js,.jsx --fix"
   },
   "repository": {
@@ -55,7 +59,7 @@
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0",
-    "react-native": "^0.74.0 || ^0.76.0 || ^0.79.0 || ^0.81.0 || ^0.83.0"
+    "react-native": "^0.74.0 || ^0.76.0 || ^0.79.0 || ^0.81.0 || ^0.83.0 || ^0.85.0 || ^0.86.0 || ^0.88.0"
   },
   "peerDependenciesMeta": {
     "react": {

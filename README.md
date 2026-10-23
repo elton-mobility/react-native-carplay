@@ -18,7 +18,7 @@ Come join us on our discord channel: https://discord.gg/b235pv6QHM
 
 - Minimum iOS target is 14
 - Minimum Android target is 30
-- _No Expo support due to Scenes_
+- Expo config plugin included; see [Expo scene startup](packages/react-native-carplay/README.md#expo-scene-startup)
 
 ## Installing
 

@@ -11,9 +11,9 @@ import { ListItem } from '../interfaces/ListItem';
 import { Action } from '../interfaces/Action';
 import { Header } from '../interfaces/Header';
 import { Pane } from '../interfaces/Pane';
-import { PanGestureWithTranslationEvent } from 'src/interfaces/GestureEvent';
-import { PauseReason } from 'src/interfaces/PauseReason';
-import { Maneuver } from 'src/interfaces/Maneuver';
+import { PanGestureWithTranslationEvent } from '../interfaces/GestureEvent';
+import { PauseReason } from '../interfaces/PauseReason';
+import { Maneuver } from '../interfaces/Maneuver';
 
 export interface MapButtonEvent extends BaseEvent {
   id: string;
